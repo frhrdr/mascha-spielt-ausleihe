@@ -10,6 +10,7 @@ final class MAUS_Plugin {
         MAUS_DB::maybe_install();
         if (is_admin()) {
             MAUS_Admin::boot();
+            MAUS_Stickers::boot();
         }
     }
 

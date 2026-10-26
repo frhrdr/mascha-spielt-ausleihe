@@ -17,9 +17,11 @@ final class MAUS_Settings {
         'reservation_hold_days'     => 7,
         'reminder_days_before_due'  => 3,
         'overdue_reminder_days'     => 7,
+        // Printed into the QR codes. Always the live site, never the local dev URL.
+        'qr_base_url'               => 'https://machbarschaft-suedstadt.de',
     ];
 
-    /** @return int */
+    /** @return int|string */
     public static function get(string $key) {
         if (!array_key_exists($key, self::DEFAULTS)) {
             throw new InvalidArgumentException("Unknown setting: $key");

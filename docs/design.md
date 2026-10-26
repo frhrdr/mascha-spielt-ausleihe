@@ -425,9 +425,10 @@ says what is built, how to run it, and what was learned along the way.
 | Copy IDs (`class-copy-id.php`) | 4 random Crockford-Base32 characters + 1 check character (e.g. `K7Q2X`). Data characters use only the first 31 symbols and the check is a weighted sum mod 31, which detects every single-character error and neighbour swap (verified over ~476k cases). `parse()` accepts a bare ID or a full URL (domain ignored), and maps O→0, I/L→1 |
 | CSV import (`class-csv-import.php`, admin page "CSV import") | BGG collection export → preview report → Apply. Identifies copies by `collid`. New copy gets a QR code. Duplicates get labels `#1`, `#2`. Copies missing from a later CSV are retired, except when on loan (flagged instead). Refuses an empty file. Re-importing the same file changes nothing (verified). Runs in one transaction |
 | Admin (`class-admin.php`) | Overview with counts, read-only **Catalog** list (filters: expansions, duplicates, retired; search by name or code), CSV import |
+| Stickers (`class-stickers.php`, admin page "Stickers") | Printable A4 sheets of 60 × 30 mm labels (3 × 9 = 27 per sheet) for plain inkjet sticker paper, cut by hand along light hairlines. QR (error correction M, ~22 mm) on the left, ID / copy label / game name on the right. QR codes are drawn in the browser with the bundled MIT-licensed `assets/qrcode.js` (qrcode-generator 1.4.4), so the server needs no library. The URL base is `qr_base_url` in `MAUS_Settings` (the live domain, never the local one). Options: only unprinted copies or all, skip N cells to reuse a partly used sheet. After printing, "Mark as printed" sets `sticker_printed_at`. Geometry constants are at the top of the class. **Untested in a browser and on paper yet** |
 | First real import | 537 active copies from the club's BGG collection |
 
-**Not built yet:** QR image generation and sticker sheets, members and roles,
+**Not built yet:** members and roles,
 magic-link login, the `/c/<code>` page and in-app scanner, borrow/return,
 renewals, reservations, issue reports, reminder emails, BGG API sync, German/English
 UI texts (admin strings are English for now), GDPR notice and retention.
@@ -454,7 +455,7 @@ Columns include `objectname`, `objectid`, `collid`, `own`, `itemtype`,
 
 ### 11.6 Suggested next steps
 
-1. QR sticker sheets: pick the label size, bundle a small QR library inside the plugin (no Composer on the server), print "copies without a printed sticker" (`sticker_printed_at` is already in the schema).
+1. Test the sticker page: print one sheet on plain paper (Canon G550, A4, 100% scale, no margins), cut out a few labels and scan them with several phones. Adjust size/font in `class-stickers.php`. The `/c/<code>` page does not exist yet, so scanned codes lead to a 404 until it is built. Use black-only printing (pigment black ink is the water-resistant one on this printer) and consider clear laminate or overlay film for wear.
 2. Members: admin invite, roles, magic-link login (own token table or an established plugin, §6), then the `/c/<code>` page.
 3. Borrow/return by scan, with loan rules from `MAUS_Settings`.
 4. Reservations, reminder emails and the cron-job.org pinger.
