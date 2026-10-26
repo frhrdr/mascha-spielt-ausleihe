@@ -15,6 +15,8 @@ final class MAUS_Admin {
     public static function menu(): void {
         add_menu_page('Ausleihe', 'Ausleihe', self::CAP, 'maus', [self::class, 'render_home'], 'dashicons-book-alt');
         add_submenu_page('maus', 'Catalog', 'Catalog', self::CAP, 'maus-catalog', [self::class, 'render_catalog']);
+        add_submenu_page('maus', 'Loans', 'Loans', self::CAP, 'maus-loans', [self::class, 'render_loans']);
+        add_submenu_page('maus', 'Reported issues', 'Issues', self::CAP, 'maus-issues', [self::class, 'render_issues']);
         add_submenu_page('maus', 'QR stickers', 'Stickers', self::CAP, 'maus-stickers', ['MAUS_Stickers', 'render_page']);
         add_submenu_page('maus', 'Members', 'Members', self::CAP, 'maus-members', [self::class, 'render_members']);
         add_submenu_page('maus', 'BGG CSV import', 'CSV import', self::CAP, 'maus-import', [self::class, 'render_import']);
@@ -29,6 +31,15 @@ final class MAUS_Admin {
             esc_html(MAUS_VERSION),
             $count('games', 'removed_from_bgg = 0'),
             $count('copies', 'retired = 0')
+        );
+        printf(
+            '<p><a href="%s">%d open loans</a>, <a href="%s">%d overdue</a>, <a href="%s">%d open issues</a>.</p>',
+            esc_url(admin_url('admin.php?page=maus-loans')),
+            $count('loans', 'returned_at IS NULL'),
+            esc_url(admin_url('admin.php?page=maus-loans&filter=overdue')),
+            $count('loans', $wpdb->prepare('returned_at IS NULL AND due_at < %s', gmdate('Y-m-d H:i:s'))),
+            esc_url(admin_url('admin.php?page=maus-issues')),
+            $count('issues', 'resolved_at IS NULL')
         );
         echo '</div>';
     }
@@ -109,6 +120,98 @@ final class MAUS_Admin {
             ]) . '</p>';
         }
         echo '</div>';
+    }
+
+    /** Loans: open (default), overdue, or the latest returned ones. Changes happen on /c/<code>. */
+    public static function render_loans(): void {
+        global $wpdb;
+        if (!current_user_can(self::CAP)) {
+            wp_die('Not allowed.');
+        }
+        $filter = sanitize_key($_GET['filter'] ?? 'open');
+        $now = gmdate('Y-m-d H:i:s');
+        $where = [
+            'open'     => 'l.returned_at IS NULL',
+            'overdue'  => $wpdb->prepare('l.returned_at IS NULL AND l.due_at < %s', $now),
+            'returned' => 'l.returned_at IS NOT NULL',
+        ][$filter] ?? 'l.returned_at IS NULL';
+        $order = $filter === 'returned' ? 'l.returned_at DESC' : 'l.due_at';
+        $rows = $wpdb->get_results(
+            'SELECT l.*, c.qr_code, c.label, g.name, m.name AS member_name, r.name AS returned_by_name
+             FROM ' . MAUS_DB::table('loans') . ' l
+             JOIN ' . MAUS_DB::table('copies') . ' c ON c.id = l.copy_id
+             JOIN ' . MAUS_DB::table('games') . ' g ON g.id = c.game_id
+             JOIN ' . MAUS_DB::table('members') . ' m ON m.id = l.member_id
+             LEFT JOIN ' . MAUS_DB::table('members') . " r ON r.id = l.returned_by
+             WHERE $where ORDER BY $order LIMIT 500"
+        );
+
+        echo '<div class="wrap"><h1>Loans</h1>';
+        self::filter_links('maus-loans', $filter, ['open' => 'Open', 'overdue' => 'Overdue', 'returned' => 'Returned (latest 500)']);
+        echo '<p>To return or correct a loan, open the copy (code link) while signed in as an admin member.</p>';
+        echo '<table class="widefat striped"><thead><tr><th>Code</th><th>Game</th><th>Member</th><th>Borrowed</th><th>Due</th><th>Renewals</th><th>Returned</th><th>Returned by</th><th>Complete</th></tr></thead><tbody>';
+        $date = fn(?string $utc) => $utc ? wp_date('Y-m-d', strtotime($utc . ' UTC')) : '';
+        foreach ($rows as $r) {
+            $late = $r->returned_at === null && $r->due_at < $now;
+            printf(
+                '<tr><td><a href="%s"><code>%s</code></a></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                esc_url(home_url('/c/' . $r->qr_code)), esc_html($r->qr_code), esc_html(trim($r->name . ' ' . $r->label)), esc_html($r->member_name),
+                esc_html($date($r->checked_out_at)), ($late ? '<strong style="color:#b32d2e">' : '') . esc_html($date($r->due_at)) . ($late ? '</strong>' : ''),
+                (int) $r->extended_count, esc_html($date($r->returned_at)),
+                esc_html($r->returned_by && (int) $r->returned_by !== (int) $r->member_id ? (string) $r->returned_by_name : ''),
+                $r->complete === null ? '' : ($r->complete ? 'yes' : '<strong>no</strong>')
+            );
+        }
+        echo '</tbody></table>';
+        if (!$rows) {
+            echo '<p>None.</p>';
+        }
+        echo '</div>';
+    }
+
+    /** Reports of missing parts or damage. Admin members resolve them on /ausleihe/issues or the copy page. */
+    public static function render_issues(): void {
+        global $wpdb;
+        if (!current_user_can(self::CAP)) {
+            wp_die('Not allowed.');
+        }
+        echo '<div class="wrap"><h1>Reported issues</h1>';
+        $filter = sanitize_key($_GET['filter'] ?? 'open');
+        $resolved = $filter === 'resolved';
+        $rows = $wpdb->get_results(
+            'SELECT i.*, c.qr_code, c.label, g.name, m.name AS reporter, r.name AS resolver
+             FROM ' . MAUS_DB::table('issues') . ' i
+             JOIN ' . MAUS_DB::table('copies') . ' c ON c.id = i.copy_id
+             JOIN ' . MAUS_DB::table('games') . ' g ON g.id = c.game_id
+             LEFT JOIN ' . MAUS_DB::table('members') . ' m ON m.id = i.reported_by
+             LEFT JOIN ' . MAUS_DB::table('members') . ' r ON r.id = i.resolved_by
+             WHERE i.resolved_at IS ' . ($resolved ? 'NOT NULL ORDER BY i.resolved_at DESC' : 'NULL ORDER BY i.reported_at') . ' LIMIT 500'
+        );
+        self::filter_links('maus-issues', $resolved ? 'resolved' : 'open', ['open' => 'Open', 'resolved' => 'Resolved (latest 500)']);
+        echo '<p>Admin members mark reports as resolved on their phone: <a href="' . esc_url(home_url('/ausleihe/issues')) . '">/ausleihe/issues</a> or the copy page.</p>';
+        echo '<table class="widefat striped"><thead><tr><th>Reported</th><th>Code</th><th>Game</th><th>By</th><th>Report</th>' . ($resolved ? '<th>Resolved</th><th>Resolved by</th><th>What was done</th>' : '') . '</tr></thead><tbody>';
+        foreach ($rows as $r) {
+            printf(
+                '<tr><td>%s</td><td><a href="%s"><code>%s</code></a></td><td>%s</td><td>%s</td><td>%s</td>%s</tr>',
+                esc_html(wp_date('Y-m-d', strtotime($r->reported_at . ' UTC'))), esc_url(home_url('/c/' . $r->qr_code)), esc_html($r->qr_code),
+                esc_html(trim($r->name . ' ' . $r->label)), esc_html((string) $r->reporter), nl2br(esc_html($r->text)),
+                $resolved ? '<td>' . esc_html(wp_date('Y-m-d', strtotime($r->resolved_at . ' UTC'))) . '</td><td>' . esc_html((string) $r->resolver) . '</td><td>' . nl2br(esc_html((string) $r->resolution_note)) . '</td>' : ''
+            );
+        }
+        echo '</tbody></table>';
+        if (!$rows) {
+            echo '<p>None.</p>';
+        }
+        echo '</div>';
+    }
+
+    private static function filter_links(string $page, string $current, array $filters): void {
+        $links = [];
+        foreach ($filters as $key => $label) {
+            $links[] = $key === $current ? '<strong>' . esc_html($label) . '</strong>'
+                : '<a href="' . esc_url(admin_url('admin.php?page=' . $page . '&filter=' . $key)) . '">' . esc_html($label) . '</a>';
+        }
+        echo '<p>' . implode(' | ', $links) . '</p>';
     }
 
     /** Member list plus its CSV import (preview first, then apply). */

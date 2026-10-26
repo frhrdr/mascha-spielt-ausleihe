@@ -30,7 +30,31 @@ final class MAUS_Loans {
         if (count(self::open_for_member((int) $member->id)) >= MAUS_Settings::get('max_concurrent_loans')) {
             return 'limit';
         }
+        return self::create($copy, $member, $member);
+    }
 
+    /**
+     * Desk flow (§5.3): an admin borrows for any active member, also a new
+     * one. The loan limit does not apply; admins may override it (§4), and
+     * the page shows each member's current count. @return true|string
+     */
+    public static function borrow_for(object $copy, int $member_id, object $admin) {
+        if ($admin->role !== 'admin') {
+            return 'not_allowed';
+        }
+        $member = MAUS_Members::find($member_id);
+        if (!$member || !(int) $member->active) {
+            return 'no_member';
+        }
+        if ($copy->retired || !$copy->lendable) {
+            return 'not_lendable';
+        }
+        return self::create($copy, $member, $admin);
+    }
+
+    /** @return true|string */
+    private static function create(object $copy, object $member, object $by) {
+        global $wpdb;
         // Lock the copy row so two people tapping at once cannot both borrow it.
         $wpdb->query('START TRANSACTION');
         $wpdb->query($wpdb->prepare('SELECT id FROM ' . MAUS_DB::table('copies') . ' WHERE id = %d FOR UPDATE', $copy->id));
@@ -43,14 +67,60 @@ final class MAUS_Loans {
             'copy_id'        => $copy->id,
             'member_id'      => $member->id,
             'checked_out_at' => gmdate('Y-m-d H:i:s', $now),
-            'checked_out_by' => $member->id,
+            'checked_out_by' => $by->id,
             'due_at'         => gmdate('Y-m-d H:i:s', $now + MAUS_Settings::get('loan_period_days') * DAY_IN_SECONDS),
         ]);
         $wpdb->query($ok ? 'COMMIT' : 'ROLLBACK');
         return $ok ? true : 'failed';
     }
 
-    /** A new loan period from today, up to max_renewals times. @return true|string */
+    /**
+     * Admin correction: another borrower and/or due date (local date, due at
+     * the end of that day). @return true|string
+     */
+    public static function correct(object $loan, object $admin, int $member_id, string $due_date) {
+        global $wpdb;
+        if ($admin->role !== 'admin') {
+            return 'not_allowed';
+        }
+        $member = MAUS_Members::find($member_id);
+        if (!$member || !(int) $member->active) {
+            return 'no_member';
+        }
+        $due = DateTime::createFromFormat('!Y-m-d', $due_date, wp_timezone());
+        if (!$due || $due->format('Y-m-d') !== $due_date) {
+            return 'bad_date';
+        }
+        $due->setTime(23, 59, 59)->setTimezone(new DateTimeZone('UTC'));
+        $updated = $wpdb->query($wpdb->prepare(
+            'UPDATE ' . MAUS_DB::table('loans') . ' SET member_id = %d, due_at = %s WHERE id = %d AND returned_at IS NULL',
+            $member->id, $due->format('Y-m-d H:i:s'), $loan->id
+        ));
+        return $updated === false ? 'failed' : true; // 0 rows is fine: nothing changed
+    }
+
+    /**
+     * Admin correction: a loan that was recorded by mistake is deleted, not
+     * returned, so it does not count in the history. @return true|string
+     */
+    public static function cancel(object $loan, object $admin) {
+        global $wpdb;
+        if ($admin->role !== 'admin') {
+            return 'not_allowed';
+        }
+        $deleted = $wpdb->delete(MAUS_DB::table('loans'), ['id' => $loan->id, 'returned_at' => null]);
+        return $deleted === 1 ? true : 'already_returned';
+    }
+
+    /** Renewing opens reminder_days_before_due days before the due date (also when overdue). */
+    public static function renew_opens_at(object $loan): int {
+        return strtotime($loan->due_at . ' UTC') - MAUS_Settings::get('reminder_days_before_due') * DAY_IN_SECONDS;
+    }
+
+    /**
+     * One more loan period, counted from the due date (from today when
+     * overdue), up to max_renewals times. @return true|string
+     */
     public static function renew(object $loan, object $member) {
         global $wpdb;
         if ((int) $loan->member_id !== (int) $member->id) {
@@ -59,10 +129,14 @@ final class MAUS_Loans {
         if ((int) $loan->extended_count >= MAUS_Settings::get('max_renewals')) {
             return 'no_renewals';
         }
+        if (time() < self::renew_opens_at($loan)) {
+            return 'too_early';
+        }
+        $from = max(time(), strtotime($loan->due_at . ' UTC'));
         $updated = $wpdb->query($wpdb->prepare(
             'UPDATE ' . MAUS_DB::table('loans') . ' SET due_at = %s, extended_count = extended_count + 1
              WHERE id = %d AND returned_at IS NULL AND extended_count = %d',
-            gmdate('Y-m-d H:i:s', time() + MAUS_Settings::get('loan_period_days') * DAY_IN_SECONDS),
+            gmdate('Y-m-d H:i:s', $from + MAUS_Settings::get('loan_period_days') * DAY_IN_SECONDS),
             $loan->id, $loan->extended_count
         ));
         return $updated === 1 ? true : 'failed';
@@ -71,7 +145,8 @@ final class MAUS_Loans {
     /**
      * Closes a loan. The borrower returns their own; any trusted member or
      * admin may close someone else's loan when they find the game on the
-     * shelf, which is recorded and reported to the admins. @return true|string
+     * shelf, which is recorded and reported to the admins. An admin doing it
+     * is the desk flow and needs no report. @return true|string
      */
     public static function return_loan(object $loan, object $member) {
         global $wpdb;
@@ -86,7 +161,7 @@ final class MAUS_Loans {
         if ($updated !== 1) {
             return 'already_returned';
         }
-        if (!$own) {
+        if (!$own && $member->role !== 'admin') {
             MAUS_Mail::found_on_shelf(self::find((int) $loan->id), $member);
         }
         return true;

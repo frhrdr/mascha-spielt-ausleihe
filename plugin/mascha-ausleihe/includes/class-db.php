@@ -6,7 +6,7 @@ if (!defined('ABSPATH')) {
 
 final class MAUS_DB {
 
-    private const VERSION = '2';
+    private const VERSION = '3';
     private const OPTION  = 'maus_db_version';
 
     public static function table(string $name): string {
@@ -125,6 +125,7 @@ final class MAUS_DB {
   text text NOT NULL,
   resolved_at datetime DEFAULT NULL,
   resolved_by bigint(20) unsigned DEFAULT NULL,
+  resolution_note text,
   PRIMARY KEY  (id),
   KEY copy_id (copy_id)
 ) $charset;";

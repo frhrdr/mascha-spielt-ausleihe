@@ -15,7 +15,8 @@ final class MAUS_Settings {
         'max_renewals'              => 2,
         'max_concurrent_loans'      => 10,
         'reservation_hold_days'     => 7,
-        'reminder_days_before_due'  => 3,
+        // The reminder goes out this many days before the due date, and renewing opens at the same time.
+        'reminder_days_before_due'  => 7,
         'overdue_reminder_days'     => 7,
         'login_link_minutes'        => 15,
         'session_days'              => 30,

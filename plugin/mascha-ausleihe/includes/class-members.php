@@ -27,6 +27,17 @@ final class MAUS_Members {
         )) ?: null;
     }
 
+    /** Active members by name, each with open_loans (count), for the admin desk flow. */
+    public static function active_with_loan_counts(): array {
+        global $wpdb;
+        return $wpdb->get_results(
+            'SELECT m.id, m.name, m.email, COUNT(l.id) AS open_loans
+             FROM ' . MAUS_DB::table('members') . ' m
+             LEFT JOIN ' . MAUS_DB::table('loans') . ' l ON l.member_id = m.id AND l.returned_at IS NULL
+             WHERE m.active = 1 GROUP BY m.id, m.name, m.email ORDER BY m.name'
+        );
+    }
+
     /**
      * Accepts comma or semicolon separated files (German Excel writes
      * semicolons). Columns: name, email, role, language, external_id.
