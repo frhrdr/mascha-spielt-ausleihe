@@ -1,0 +1,13 @@
+name,email,role,language,external_id
+Anna Beispiel,anna.beispiel@example.com,admin,de,M-001
+Bernd Testmann,bernd.testmann@example.com,admin,de,M-002
+Clara Müller,clara.mueller@example.com,trusted,de,M-003
+David Schmidt,david.schmidt@example.com,trusted,en,M-004
+Eva Köhler,eva.koehler@example.com,trusted,de,M-005
+Farid Haddad,farid.haddad@example.com,trusted,en,M-006
+Greta Johansson,greta.johansson@example.com,trusted,en,M-007
+Hans Weiß,hans.weiss@example.com,new,de,M-008
+Ines Öztürk,ines.oeztuerk@example.com,new,de,M-009
+Jonas Fischer,jonas.fischer@example.com,new,de,M-010
+Katrin Schäfer,katrin.schaefer@example.com,new,de,
+Lukas Becker,lukas.becker@example.com,new,en,

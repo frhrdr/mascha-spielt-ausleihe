@@ -6,7 +6,7 @@ if (!defined('ABSPATH')) {
 
 final class MAUS_DB {
 
-    private const VERSION = '1';
+    private const VERSION = '2';
     private const OPTION  = 'maus_db_version';
 
     public static function table(string $name): string {
@@ -127,6 +127,31 @@ final class MAUS_DB {
   resolved_by bigint(20) unsigned DEFAULT NULL,
   PRIMARY KEY  (id),
   KEY copy_id (copy_id)
+) $charset;";
+
+        // Only hashes of tokens are stored, never the tokens themselves.
+        $schemas[] = "CREATE TABLE {$t('login_tokens')} (
+  id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  token_hash char(64) NOT NULL,
+  member_id bigint(20) unsigned NOT NULL,
+  expires_at datetime NOT NULL,
+  used_at datetime DEFAULT NULL,
+  created_at datetime NOT NULL,
+  PRIMARY KEY  (id),
+  UNIQUE KEY token_hash (token_hash),
+  KEY expires_at (expires_at)
+) $charset;";
+
+        $schemas[] = "CREATE TABLE {$t('sessions')} (
+  id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  token_hash char(64) NOT NULL,
+  member_id bigint(20) unsigned NOT NULL,
+  expires_at datetime NOT NULL,
+  created_at datetime NOT NULL,
+  PRIMARY KEY  (id),
+  UNIQUE KEY token_hash (token_hash),
+  KEY member_id (member_id),
+  KEY expires_at (expires_at)
 ) $charset;";
 
         foreach ($schemas as $sql) {

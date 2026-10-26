@@ -16,6 +16,7 @@ final class MAUS_Admin {
         add_menu_page('Ausleihe', 'Ausleihe', self::CAP, 'maus', [self::class, 'render_home'], 'dashicons-book-alt');
         add_submenu_page('maus', 'Catalog', 'Catalog', self::CAP, 'maus-catalog', [self::class, 'render_catalog']);
         add_submenu_page('maus', 'QR stickers', 'Stickers', self::CAP, 'maus-stickers', ['MAUS_Stickers', 'render_page']);
+        add_submenu_page('maus', 'Members', 'Members', self::CAP, 'maus-members', [self::class, 'render_members']);
         add_submenu_page('maus', 'BGG CSV import', 'CSV import', self::CAP, 'maus-import', [self::class, 'render_import']);
     }
 
@@ -64,7 +65,7 @@ final class MAUS_Admin {
 
         $total_sql = "SELECT COUNT(*) $from";
         $total = (int) $wpdb->get_var($args ? $wpdb->prepare($total_sql, $args) : $total_sql);
-        $rows_sql = "SELECT c.qr_code, c.label, c.retired, c.lendable, g.name, g.type, g.year, g.min_players, g.max_players, g.playtime, g.bgg_id
+        $rows_sql = "SELECT c.id, c.qr_code, c.label, c.retired, c.lendable, g.name, g.type, g.year, g.min_players, g.max_players, g.playtime, g.bgg_id
             $from ORDER BY g.name, c.id LIMIT %d OFFSET %d";
         $rows = $wpdb->get_results($wpdb->prepare($rows_sql, array_merge($args, [$per_page, ($paged - 1) * $per_page])));
 
@@ -81,16 +82,22 @@ final class MAUS_Admin {
         submit_button('Search', 'secondary', '', false);
         printf('</form><p>%d copies</p>', $total);
 
-        echo '<table class="widefat striped"><thead><tr><th>Code</th><th>Name</th><th>Copy</th><th>Type</th><th>Year</th><th>Players</th><th>Min.</th><th>Lendable</th><th>Status</th></tr></thead><tbody>';
+        echo '<form method="get" action="' . esc_url(admin_url('admin-post.php')) . '" target="_blank">';
+        echo '<input type="hidden" name="action" value="maus_stickers"><input type="hidden" name="scope" value="ids"><input type="hidden" name="guides" value="1">';
+        wp_nonce_field('maus_stickers', '_wpnonce', false);
+        echo '<p>Tick copies to reprint their stickers: <input type="number" name="skip" value="0" min="0" max="26" style="width:4em" title="Labels to skip on the first sheet"> labels skipped on the first sheet ';
+        submit_button('Print selected stickers', 'secondary', '', false);
+        echo '</p>';
+        echo '<table class="widefat striped"><thead><tr><td class="check-column"><input type="checkbox" onclick="document.querySelectorAll(\'.maus-pick\').forEach(function(b){b.checked=this.checked}.bind(this))"></td><th>Code</th><th>Name</th><th>Copy</th><th>Type</th><th>Year</th><th>Players</th><th>Min.</th><th>Lendable</th><th>Status</th></tr></thead><tbody>';
         foreach ($rows as $r) {
             $players = $r->min_players ? $r->min_players . ($r->max_players && $r->max_players !== $r->min_players ? '–' . $r->max_players : '') : '';
             printf(
-                '<tr><td><code>%s</code></td><td><a href="https://boardgamegeek.com/boardgame/%d" target="_blank" rel="noopener">%s</a></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
-                esc_html($r->qr_code), (int) $r->bgg_id, esc_html($r->name), esc_html($r->label), esc_html($r->type),
+                '<tr><th class="check-column"><input type="checkbox" class="maus-pick" name="ids[]" value="%d"></th><td><code>%s</code></td><td><a href="https://boardgamegeek.com/boardgame/%d" target="_blank" rel="noopener">%s</a></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                (int) $r->id, esc_html($r->qr_code), (int) $r->bgg_id, esc_html($r->name), esc_html($r->label), esc_html($r->type),
                 esc_html($r->year), esc_html($players), esc_html($r->playtime), $r->lendable ? 'yes' : 'no', $r->retired ? 'retired' : 'active'
             );
         }
-        echo '</tbody></table>';
+        echo '</tbody></table></form>';
 
         $pages = (int) ceil($total / $per_page);
         if ($pages > 1) {
@@ -102,6 +109,79 @@ final class MAUS_Admin {
             ]) . '</p>';
         }
         echo '</div>';
+    }
+
+    /** Member list plus its CSV import (preview first, then apply). */
+    public static function render_members(): void {
+        global $wpdb;
+        if (!current_user_can(self::CAP)) {
+            wp_die('Not allowed.');
+        }
+        echo '<div class="wrap"><h1>Members</h1>';
+        try {
+            if (isset($_POST['maus_member_apply'])) {
+                check_admin_referer('maus_members_apply');
+                $key = 'maus_members_' . get_current_user_id() . '_' . sanitize_text_field(wp_unslash($_POST['token'] ?? ''));
+                $rows = get_transient($key);
+                if (!$rows) {
+                    throw new RuntimeException('The preview has expired. Please upload the file again.');
+                }
+                $r = MAUS_Members::apply($rows);
+                delete_transient($key);
+                printf('<div class="notice notice-success"><p>Import done: %d new, %d updated.</p></div>', $r['new'], $r['updated']);
+            } elseif (isset($_POST['maus_member_upload'])) {
+                check_admin_referer('maus_members_upload');
+                self::members_preview();
+                echo '</div>';
+                return;
+            }
+        } catch (Throwable $e) {
+            echo '<div class="notice notice-error"><p>' . esc_html($e->getMessage()) . '</p></div>';
+        }
+
+        echo '<h2>Import from CSV</h2><p>Columns: <code>name, email, role, language, external_id</code>. Role is <code>new</code>, <code>trusted</code> or <code>admin</code> (default new), language <code>de</code> or <code>en</code> (default de). Comma or semicolon separated. Members are matched by email. The import adds and updates only, it never removes anyone and sends no emails.</p>';
+        echo '<form method="post" enctype="multipart/form-data">';
+        wp_nonce_field('maus_members_upload');
+        echo '<input type="file" name="csv" accept=".csv,text/csv" required> ';
+        submit_button('Preview import', 'primary', 'maus_member_upload', false);
+        echo '</form>';
+
+        $members = $wpdb->get_results('SELECT * FROM ' . MAUS_DB::table('members') . ' ORDER BY name');
+        printf('<h2>%d members</h2>', count($members));
+        echo '<table class="widefat striped"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Language</th><th>External ID</th><th>Active</th></tr></thead><tbody>';
+        foreach ($members as $m) {
+            printf('<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                esc_html($m->name), esc_html($m->email), esc_html($m->role), esc_html($m->language), esc_html((string) $m->external_id), $m->active ? 'yes' : 'no');
+        }
+        echo '</tbody></table></div>';
+    }
+
+    private static function members_preview(): void {
+        if (empty($_FILES['csv']['tmp_name']) || !is_uploaded_file($_FILES['csv']['tmp_name'])) {
+            throw new RuntimeException('No file received.');
+        }
+        $parsed = MAUS_Members::parse_csv((string) file_get_contents($_FILES['csv']['tmp_name']));
+        if (!$parsed['rows']) {
+            throw new RuntimeException(implode(' ', $parsed['errors']) ?: 'No usable rows found.');
+        }
+        $plan = MAUS_Members::plan($parsed['rows']);
+        $token = wp_generate_password(20, false);
+        set_transient('maus_members_' . get_current_user_id() . '_' . $token, $parsed['rows'], HOUR_IN_SECONDS);
+
+        printf('<h2>Report</h2><ul><li><strong>%d</strong> new members</li><li><strong>%d</strong> updated, %d unchanged</li></ul>',
+            count($plan['new']), count($plan['updated']), $plan['unchanged']);
+        self::name_list('New', array_map(fn($r) => ['name' => $r['name'] . ' <' . $r['email'] . '>'], $plan['new']));
+        foreach ($plan['updated'] as $u) {
+            echo '<p>' . esc_html($u['email'] . ': ' . implode(', ', $u['changes'])) . '</p>';
+        }
+        if ($parsed['errors']) {
+            echo '<div class="notice notice-warning inline"><p>' . implode('<br>', array_map('esc_html', $parsed['errors'])) . '</p></div>';
+        }
+        echo '<form method="post">';
+        wp_nonce_field('maus_members_apply');
+        echo '<input type="hidden" name="token" value="' . esc_attr($token) . '">';
+        submit_button('Apply import', 'primary', 'maus_member_apply', false);
+        echo ' <a href="' . esc_url(admin_url('admin.php?page=maus-members')) . '">Cancel</a></form>';
     }
 
     public static function render_import(): void {

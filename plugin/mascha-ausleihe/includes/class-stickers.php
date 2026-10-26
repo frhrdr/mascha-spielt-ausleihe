@@ -64,10 +64,11 @@ final class MAUS_Stickers {
             wp_die('Not allowed.');
         }
         check_admin_referer('maus_stickers');
-        $scope  = ($_GET['scope'] ?? '') === 'all' ? 'all' : 'unprinted';
+        $scope  = in_array($_GET['scope'] ?? '', ['all', 'ids'], true) ? $_GET['scope'] : 'unprinted';
+        $ids    = $scope === 'ids' ? array_values(array_filter(array_map('intval', (array) ($_GET['ids'] ?? [])))) : [];
         $skip   = max(0, min(self::COLS * self::ROWS - 1, (int) ($_GET['skip'] ?? 0)));
         $guides = !empty($_GET['guides']);
-        $copies = self::select($scope);
+        $copies = self::select($scope, $ids);
         $base   = rtrim((string) MAUS_Settings::get('qr_base_url'), '/');
 
         // Empty cells at the start, so the first sheet can be a partly used one.
@@ -161,14 +162,28 @@ document.querySelectorAll('.qr').forEach(function (el) {
         exit;
     }
 
-    /** @return object[] active copies in shelf order */
-    private static function select(string $scope): array {
+    /**
+     * Copies in shelf order. Scope "ids" returns exactly those copies, even
+     * retired ones (a sticker may need reprinting for a copy being retired).
+     *
+     * @return object[]
+     */
+    private static function select(string $scope, array $ids = []): array {
         global $wpdb;
-        $where = $scope === 'all' ? '' : 'AND c.sticker_printed_at IS NULL';
+        if ($scope === 'ids') {
+            if (!$ids) {
+                return [];
+            }
+            $where = 'AND c.id IN (' . implode(',', array_map('intval', $ids)) . ')';
+            $active = '1=1';
+        } else {
+            $where = $scope === 'all' ? '' : 'AND c.sticker_printed_at IS NULL';
+            $active = 'c.retired = 0';
+        }
         return $wpdb->get_results(
             'SELECT c.id, c.qr_code, c.label, g.name FROM ' . MAUS_DB::table('copies') . ' c
              JOIN ' . MAUS_DB::table('games') . " g ON g.id = c.game_id
-             WHERE c.retired = 0 $where ORDER BY g.name, c.id"
+             WHERE $active $where ORDER BY g.name, c.id"
         );
     }
 }

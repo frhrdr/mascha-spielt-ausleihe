@@ -17,6 +17,8 @@ final class MAUS_Settings {
         'reservation_hold_days'     => 7,
         'reminder_days_before_due'  => 3,
         'overdue_reminder_days'     => 7,
+        'login_link_minutes'        => 15,
+        'session_days'              => 30,
         // Printed into the QR codes. Always the live site, never the local dev URL.
         'qr_base_url'               => 'https://machbarschaft-suedstadt.de',
     ];

@@ -1,0 +1,8 @@
+name;email;role;language;external_id
+Anna Beispiel;ANNA.BEISPIEL@example.com;trusted;de;M-001
+Mia Neumann;mia.neumann@example.com;;;M-013
+Nils Vogel;kein-email-format;new;de;
+Olga Petrova;olga.petrova@example.com;superuser;de;
+Paul Richter;paul.richter@example.com;new;fr;
+Mia Neumann;mia.neumann@example.com;new;de;
+;leer@example.com;new;de;

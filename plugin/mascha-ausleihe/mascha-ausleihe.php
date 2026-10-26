@@ -16,7 +16,7 @@ const MAUS_VERSION = '0.1.0';
 const MAUS_FILE    = __FILE__;
 const MAUS_DIR     = __DIR__;
 
-foreach (['settings', 'db', 'copy-id', 'csv-import', 'stickers', 'admin', 'plugin'] as $maus_file) {
+foreach (['settings', 'db', 'copy-id', 'csv-import', 'stickers', 'members', 'i18n', 'mail', 'auth', 'front', 'admin', 'plugin'] as $maus_file) {
     require_once MAUS_DIR . "/includes/class-$maus_file.php";
 }
 

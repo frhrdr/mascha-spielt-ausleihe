@@ -426,10 +426,12 @@ says what is built, how to run it, and what was learned along the way.
 | CSV import (`class-csv-import.php`, admin page "CSV import") | BGG collection export → preview report → Apply. Identifies copies by `collid`. New copy gets a QR code. Duplicates get labels `#1`, `#2`. Copies missing from a later CSV are retired, except when on loan (flagged instead). Refuses an empty file. Re-importing the same file changes nothing (verified). Runs in one transaction |
 | Admin (`class-admin.php`) | Overview with counts, read-only **Catalog** list (filters: expansions, duplicates, retired; search by name or code), CSV import |
 | Stickers (`class-stickers.php`, admin page "Stickers") | Printable A4 sheets of 60 × 30 mm labels (3 × 9 = 27 per sheet) for plain inkjet sticker paper, cut by hand along light hairlines. QR (error correction M, ~22 mm) on the left, ID / copy label / game name on the right. QR codes are drawn in the browser with the bundled MIT-licensed `assets/qrcode.js` (qrcode-generator 1.4.4), so the server needs no library. The URL base is `qr_base_url` in `MAUS_Settings` (the live domain, never the local one). Options: only unprinted copies or all, skip N cells to reuse a partly used sheet. After printing, "Mark as printed" sets `sticker_printed_at`. Geometry constants are at the top of the class. **Untested in a browser and on paper yet** |
+| Sticker reprint | **Ausleihe → Catalog**: tick copies (also retired ones) and press "Print selected stickers". Same printable page, optional "skip N labels" to fill gaps on a partly used sheet |
+| Members (`class-members.php`, admin page "Members") | Admin page with list and CSV import (columns `name, email, role, language, external_id`; comma or semicolon; matched by lowercase email; preview then apply; only adds/updates, never removes or deactivates; sends no mail). No UI yet to deactivate a member or add one by hand |
+| Login (`class-auth.php`, `class-front.php`, `class-mail.php`, `class-i18n.php`) | Magic link, no passwords. Pages: `/ausleihe` (placeholder home), `/ausleihe/login`, `/ausleihe/login/confirm`, `/ausleihe/logout`, rendered as standalone mobile pages (not the WP theme), German/English by member language or browser. Link: random 256-bit token, only the SHA-256 hash is stored (`wp_maus_login_tokens`), single use, valid 15 min. Opening the link only shows a confirm button; signing in is a POST, so mail scanners cannot use it up. Session: random cookie token, hash in `wp_maus_sessions`, 30 days, HttpOnly, SameSite=Lax, Secure on HTTPS. Same response for unknown/inactive/valid addresses (no account enumeration). Rate limit: 3 links per address and 10 per IP per 15 min (transients). Logout and later state-changing forms use `MAUS_Auth::csrf_token()`. **Untested in WordPress yet** |
 | First real import | 537 active copies from the club's BGG collection |
 
-**Not built yet:** members and roles,
-magic-link login, the `/c/<code>` page and in-app scanner, borrow/return,
+**Not built yet:** adding/deactivating single members, welcome emails, the `/c/<code>` page and in-app scanner, borrow/return,
 renewals, reservations, issue reports, reminder emails, BGG API sync, German/English
 UI texts (admin strings are English for now), GDPR notice and retention.
 
@@ -456,8 +458,18 @@ Columns include `objectname`, `objectid`, `collid`, `own`, `itemtype`,
 ### 11.6 Suggested next steps
 
 1. Test the sticker page: print one sheet on plain paper (Canon G550, A4, 100% scale, no margins), cut out a few labels and scan them with several phones. Adjust size/font in `class-stickers.php`. The `/c/<code>` page does not exist yet, so scanned codes lead to a 404 until it is built. Use black-only printing (pigment black ink is the water-resistant one on this printer) and consider clear laminate or overlay film for wear.
-2. Members: admin invite, roles, magic-link login (own token table or an established plugin, §6), then the `/c/<code>` page.
+2. Test the login on Local (import `docs/sample-data/members-sample.csv`; Local catches outgoing mail). Needs pretty permalinks (Settings → Permalinks not "Plain"). Then build the `/c/<code>` page (needs login, shows the copy and its status), member add/deactivate, welcome email.
 3. Borrow/return by scan, with loan rules from `MAUS_Settings`.
 4. Reservations, reminder emails and the cron-job.org pinger.
 5. BGG API sync once the token arrives. Add `invlocation` and `comment` handling to the import if wanted.
 6. Deploy to the live site once a usable slice works, and test mail and cron there.
+
+### 11.7 Copy IDs: capacity and lifecycle
+
+- 4 data characters from 31 symbols = 31⁴ = **923,521** possible IDs (the 5th character is the check character). The collection has ~537 copies, so collisions are negligible; generation retries on a clash anyway.
+- IDs are **never reused**. The uniqueness check covers retired copies too, so a code on an old sticker can never point at a different game. A copy removed from BGG is retired and keeps its code and loan history. If the same `collid` returns in a later import, the copy is reactivated with the **same** code (old sticker works again). If a game is removed and later re-added in BGG it gets a new `collid`, hence a new copy and a new code.
+- A sticker for a retired copy should show "no longer in the collection" on the future `/c/<code>` page rather than a 404.
+
+### 11.8 Sample data
+
+`docs/sample-data/members-sample.csv`: 12 fictional members (2 admins, 5 trusted, 5 new; German and English; umlauts). `members-sample-semicolon-with-errors.csv`: semicolon-separated, exercises the update path (Anna's email in capitals and role change) and the error report (bad email, unknown role, unknown language, duplicate, missing name). All addresses are `@example.com`; to receive real test mail, edit one row.
