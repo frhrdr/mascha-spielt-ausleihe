@@ -12,6 +12,9 @@ final class MAUS_Front {
 
     private const REWRITE_VERSION = '2';
 
+    /** Error keys from MAUS_Loans that the copy page shows as 'err_<key>'. */
+    private const ERRORS = ['not_allowed', 'not_lendable', 'limit', 'taken', 'no_renewals', 'already_returned', 'empty_report', 'failed'];
+
     public static function boot(): void {
         add_action('init', [self::class, 'register_rules']);
         add_action('init', [self::class, 'maybe_flush_rules'], 99);
@@ -47,7 +50,7 @@ final class MAUS_Front {
                 self::home();
                 break;
             case 'copy':
-                self::copy_page();
+                self::copy_page($post);
                 break;
             case 'login':
                 $post ? self::login_post() : self::login_form();
@@ -75,15 +78,16 @@ final class MAUS_Front {
         $l = $m->language;
         $role = MAUS_I18n::t('role_' . $m->role, $l);
         $body = '<p>' . esc_html(MAUS_I18n::t('role_line', $l, $role)) . '</p>'
-            . '<p>' . esc_html(MAUS_I18n::t('home_todo', $l)) . '</p>'
+            . self::my_loans($m)
+            . '<p>' . esc_html(MAUS_I18n::t('home_scan', $l)) . '</p>'
             . '<form method="post" action="' . esc_url(home_url('/ausleihe/logout')) . '">'
             . '<input type="hidden" name="csrf" value="' . esc_attr(MAUS_Auth::csrf_token()) . '">'
             . '<button class="secondary">' . esc_html(MAUS_I18n::t('sign_out', $l)) . '</button></form>';
         self::page($l, MAUS_I18n::t('hello', $l, $m->name), $body);
     }
 
-    /** Sticker URL /c/<code>: the copy and its status (design §5.2). */
-    private static function copy_page(): void {
+    /** Sticker URL /c/<code>: the copy, its status and what the member can do (design §5.2). */
+    private static function copy_page(bool $post): void {
         $raw = (string) get_query_var('maus_code');
         $code = MAUS_Copy_ID::parse($raw);
         if ($code === null) {
@@ -107,6 +111,37 @@ final class MAUS_Front {
             self::page($l, $code, '<p>' . esc_html(MAUS_I18n::t('copy_unknown', $l)) . '</p>' . self::home_link($l));
             return;
         }
+        if ($post) {
+            self::copy_action($copy, $m);
+        }
+        $title = trim($copy->name . ' ' . $copy->label);
+        $done = (string) ($_GET['done'] ?? '');
+
+        // Right after a return: "Is the game complete?" (D7). Skipping is fine.
+        $answer_loan = $done === 'returned' ? MAUS_Loans::awaiting_answer((int) ($_GET['loan'] ?? 0), $m) : null;
+        if ($answer_loan) {
+            $body = '<p class="ok">' . esc_html(MAUS_I18n::t('done_returned', $l)) . '</p>'
+                . '<p>' . esc_html(MAUS_I18n::t('complete_question', $l)) . '</p>'
+                . self::action_form($code, 'complete', MAUS_I18n::t('complete_yes', $l), ['loan' => $answer_loan->id])
+                . '<p><a href="' . esc_url(home_url('/c/' . $code . '?report=1&loan=' . $answer_loan->id)) . '">' . esc_html(MAUS_I18n::t('complete_no', $l)) . '</a></p>'
+                . '<p><a href="' . esc_url(home_url('/c/' . $code)) . '">' . esc_html(MAUS_I18n::t('complete_skip', $l)) . '</a></p>';
+            self::page($l, $title, $body);
+            return;
+        }
+
+        if (isset($_GET['report']) && !$copy->retired) {
+            $report_loan = MAUS_Loans::awaiting_answer((int) ($_GET['loan'] ?? 0), $m);
+            $body = '<form method="post" action="' . esc_url(home_url('/c/' . $code)) . '">'
+                . '<input type="hidden" name="csrf" value="' . esc_attr(MAUS_Auth::csrf_token()) . '">'
+                . '<input type="hidden" name="do" value="report">'
+                . ($report_loan ? '<input type="hidden" name="loan" value="' . (int) $report_loan->id . '">' : '')
+                . '<label for="text">' . esc_html(MAUS_I18n::t('report_label', $l)) . '</label>'
+                . '<textarea id="text" name="text" rows="5" maxlength="2000" required autofocus></textarea>'
+                . '<button>' . esc_html(MAUS_I18n::t('report_send', $l)) . '</button></form>'
+                . '<p><a href="' . esc_url(home_url('/c/' . $code)) . '">' . esc_html(MAUS_I18n::t('cancel', $l)) . '</a></p>';
+            self::page($l, MAUS_I18n::t('report_title', $l), '<p class="muted">' . esc_html($title) . '</p>' . $body);
+            return;
+        }
 
         $facts = [];
         if ($copy->type === 'expansion') {
@@ -123,30 +158,111 @@ final class MAUS_Front {
             $facts[] = $copy->year;
         }
 
+        $notice = '';
+        $err = (string) ($_GET['err'] ?? '');
+        if (in_array($err, self::ERRORS, true)) {
+            $notice = '<p class="warn">' . esc_html(MAUS_I18n::t('err_' . $err, $l, MAUS_Settings::get('max_concurrent_loans'))) . '</p>';
+        } elseif (in_array($done, ['borrowed', 'renewed', 'returned', 'thanks', 'reported'], true)) {
+            $notice = '<p class="ok">' . esc_html(MAUS_I18n::t('done_' . $done, $l)) . '</p>';
+        }
+
         $loan = $copy->retired ? null : MAUS_Copies::open_loan((int) $copy->id);
+        $actions = '';
         if ($copy->retired) {
             $status = '<p class="warn">' . esc_html(MAUS_I18n::t('copy_retired', $l)) . '</p>';
         } elseif ($loan && (int) $loan->member_id === (int) $m->id) {
             $overdue = strtotime($loan->due_at . ' UTC') < time();
             $status = '<p class="' . ($overdue ? 'warn' : 'ok') . '">' . esc_html(MAUS_I18n::t($overdue ? 'status_mine_overdue' : 'status_mine', $l, self::date($loan->due_at, $l))) . '</p>';
+            $actions = self::action_form($code, 'return', MAUS_I18n::t('return', $l), ['loan' => $loan->id]);
+            $left = MAUS_Settings::get('max_renewals') - (int) $loan->extended_count;
+            $actions .= $left > 0
+                ? self::action_form($code, 'renew', MAUS_I18n::t('renew', $l, $left), ['loan' => $loan->id], 'secondary')
+                : '<p class="muted">' . esc_html(MAUS_I18n::t('no_renewals_left', $l)) . '</p>';
         } elseif ($loan) {
             // Only admins see who has a game (D3).
             $status = '<p class="warn">' . esc_html($m->role === 'admin'
                 ? MAUS_I18n::t('status_on_loan_admin', $l, $loan->member_name, self::date($loan->due_at, $l))
                 : MAUS_I18n::t('status_on_loan', $l)) . '</p>';
+            if (MAUS_Loans::can_self_serve($m)) {
+                $actions = '<p>' . esc_html(MAUS_I18n::t('found_hint', $l)) . '</p>'
+                    . self::action_form($code, 'return', MAUS_I18n::t('found', $l), ['loan' => $loan->id], 'secondary', MAUS_I18n::t('found_confirm', $l));
+            }
         } elseif (!$copy->lendable) {
             $status = '<p class="warn">' . esc_html(MAUS_I18n::t('status_onsite', $l)) . '</p>';
         } else {
-            $status = '<p class="ok">' . esc_html(MAUS_I18n::t('status_available', $l)) . '</p>'
-                . '<p>' . esc_html(MAUS_I18n::t($m->role === 'new' ? 'borrow_via_team' : 'borrow_soon', $l)) . '</p>';
+            $status = '<p class="ok">' . esc_html(MAUS_I18n::t('status_available', $l)) . '</p>';
+            $actions = MAUS_Loans::can_self_serve($m)
+                ? self::action_form($code, 'borrow', MAUS_I18n::t('borrow', $l))
+                    . '<p class="muted">' . esc_html(MAUS_I18n::t('borrow_hint', $l, self::date(gmdate('Y-m-d H:i:s', time() + MAUS_Settings::get('loan_period_days') * DAY_IN_SECONDS), $l))) . '</p>'
+                : '<p>' . esc_html(MAUS_I18n::t('borrow_via_team', $l)) . '</p>';
         }
 
-        $body = ($copy->image_url ? '<img src="' . esc_url($copy->image_url) . '" alt="">' : '')
+        $body = $notice
+            . ($copy->image_url ? '<img src="' . esc_url($copy->image_url) . '" alt="">' : '')
             . ($facts ? '<p class="muted">' . esc_html(implode(' · ', $facts)) . '</p>' : '')
             . '<p class="muted">' . esc_html(MAUS_I18n::t('copy_code', $l, $code)) . '</p>'
-            . $status
+            . $status . $actions
+            . ($copy->retired ? '' : '<p><a href="' . esc_url(home_url('/c/' . $code . '?report=1')) . '">' . esc_html(MAUS_I18n::t('report_link', $l)) . '</a></p>')
             . self::home_link($l);
-        self::page($l, trim($copy->name . ' ' . $copy->label), $body);
+        self::page($l, $title, $body);
+    }
+
+    /** Handles a button on the copy page, then redirects back to it (POST → redirect → GET). */
+    private static function copy_action(object $copy, object $m): void {
+        $back = '/c/' . $copy->qr_code;
+        if (!MAUS_Auth::csrf_ok((string) ($_POST['csrf'] ?? ''))) {
+            self::go($back);
+        }
+        $do = (string) ($_POST['do'] ?? '');
+        $loan_id = (int) ($_POST['loan'] ?? 0);
+        // The posted loan must still be the open one, so a stale page cannot close a newer loan.
+        $loan = MAUS_Copies::open_loan((int) $copy->id);
+        if ($loan && (int) $loan->id !== $loan_id) {
+            $loan = null;
+        }
+        $query = '';
+        switch ($do) {
+            case 'borrow':
+                $result = MAUS_Loans::borrow($copy, $m);
+                $query = 'done=borrowed';
+                break;
+            case 'renew':
+                $result = $loan ? MAUS_Loans::renew($loan, $m) : 'already_returned';
+                $query = 'done=renewed';
+                break;
+            case 'return':
+                $result = $loan ? MAUS_Loans::return_loan($loan, $m) : 'already_returned';
+                $query = 'done=returned&loan=' . $loan_id;
+                break;
+            case 'complete':
+                $answered = MAUS_Loans::awaiting_answer($loan_id, $m);
+                if ($answered) {
+                    MAUS_Loans::mark_complete($answered);
+                }
+                $result = true;
+                $query = 'done=thanks';
+                break;
+            case 'report':
+                $answered = $loan_id ? MAUS_Loans::awaiting_answer($loan_id, $m) : null;
+                $result = MAUS_Loans::report_issue($copy, $m, (string) wp_unslash($_POST['text'] ?? ''), $answered);
+                $query = 'done=reported';
+                break;
+            default:
+                self::go($back);
+        }
+        self::go($back . '?' . ($result === true ? $query : 'err=' . $result));
+    }
+
+    /** One button in its own small form with the CSRF token. */
+    private static function action_form(string $code, string $do, string $label, array $fields = [], string $class = '', string $confirm = ''): string {
+        $html = '<form method="post" action="' . esc_url(home_url('/c/' . $code)) . '"'
+            . ($confirm !== '' ? ' onsubmit="return confirm(' . esc_attr(wp_json_encode($confirm)) . ')"' : '') . '>'
+            . '<input type="hidden" name="csrf" value="' . esc_attr(MAUS_Auth::csrf_token()) . '">'
+            . '<input type="hidden" name="do" value="' . esc_attr($do) . '">';
+        foreach ($fields as $name => $value) {
+            $html .= '<input type="hidden" name="' . esc_attr($name) . '" value="' . esc_attr((string) $value) . '">';
+        }
+        return $html . '<button' . ($class !== '' ? ' class="' . esc_attr($class) . '"' : '') . '>' . esc_html($label) . '</button></form>';
     }
 
     private static function login_form(string $notice = ''): void {
@@ -219,6 +335,21 @@ final class MAUS_Front {
 
     /* ------------------------------ helpers ------------------------------ */
 
+    private static function my_loans(object $m): string {
+        $l = $m->language;
+        $loans = MAUS_Loans::open_for_member((int) $m->id);
+        if (!$loans) {
+            return '<p>' . esc_html(MAUS_I18n::t('no_loans', $l)) . '</p>';
+        }
+        $html = '<h2>' . esc_html(MAUS_I18n::t('my_loans', $l)) . '</h2><ul class="loans">';
+        foreach ($loans as $loan) {
+            $overdue = strtotime($loan->due_at . ' UTC') < time();
+            $html .= '<li><a href="' . esc_url(home_url('/c/' . $loan->qr_code)) . '">' . esc_html(trim($loan->name . ' ' . $loan->label)) . '</a><br>'
+                . '<span class="' . ($overdue ? 'late' : 'muted') . '">' . esc_html(MAUS_I18n::t($overdue ? 'due_overdue' : 'due_by', $l, self::date($loan->due_at, $l))) . '</span></li>';
+        }
+        return $html . '</ul>';
+    }
+
     /** Where to land after sign-in: only our own pages, never an outside URL. */
     private static function next_path(): string {
         $next = (string) wp_unslash($_POST['next'] ?? $_GET['next'] ?? '');
@@ -247,11 +378,12 @@ final class MAUS_Front {
             . 'body{margin:0;font:16px/1.5 system-ui,sans-serif;background:#f6f4ef;color:#222}'
             . 'main{max-width:26rem;margin:0 auto;padding:1.5rem 1rem}'
             . 'h1{font-size:1.4rem}label{display:block;margin:1rem 0 .25rem}'
-            . 'input{width:100%;box-sizing:border-box;font:inherit;padding:.6rem;border:1px solid #888;border-radius:6px}'
+            . 'input,textarea{width:100%;box-sizing:border-box;font:inherit;padding:.6rem;border:1px solid #888;border-radius:6px}'
             . 'button{margin-top:1rem;width:100%;font:inherit;padding:.7rem;border:0;border-radius:6px;background:#2c5d4a;color:#fff}'
             . 'button.secondary{background:#fff;color:#2c5d4a;border:1px solid #2c5d4a}'
             . '.warn{background:#fff3cd;padding:.6rem;border-radius:6px}a{color:#2c5d4a}'
             . '.ok{background:#e1efe8;padding:.6rem;border-radius:6px}.muted{color:#666;margin:.25rem 0}'
+            . 'h2{font-size:1.1rem;margin-top:1.5rem}.loans{padding:0;list-style:none}.loans li{margin:.6rem 0}.late{color:#a33}'
             . 'img{display:block;max-width:100%;max-height:14rem;margin:0 auto 1rem;border-radius:6px}'
             . '</style></head><body><main><h1>' . esc_html($title) . '</h1>' . $body . '</main></body></html>';
     }
