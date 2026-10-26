@@ -23,8 +23,9 @@ final class MAUS_Auth {
     /* ---------------------------- login links ---------------------------- */
 
     /** Always behaves the same for unknown, inactive and valid addresses. */
+    /** $next is a path validated by the caller; the link carries it back after sign-in. */
     /** @return string 'sent' or 'limited' */
-    public static function request_link(string $email): string {
+    public static function request_link(string $email, string $next = ''): string {
         $email = strtolower(trim($email));
         if (!is_email($email) || !self::rate_ok($email)) {
             return is_email($email) ? 'limited' : 'sent';
@@ -41,7 +42,7 @@ final class MAUS_Auth {
                 'expires_at' => gmdate('Y-m-d H:i:s', time() + MAUS_Settings::get('login_link_minutes') * 60),
                 'created_at' => gmdate('Y-m-d H:i:s'),
             ]);
-            $url = home_url('/ausleihe/login/confirm') . '?token=' . $token;
+            $url = home_url('/ausleihe/login/confirm') . '?token=' . $token . ($next !== '' ? '&next=' . rawurlencode($next) : '');
             if (!MAUS_Mail::send_login_link($member, $url)) {
                 error_log('maus: login mail could not be sent to member ' . $member->id);
             }

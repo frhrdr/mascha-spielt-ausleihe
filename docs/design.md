@@ -395,7 +395,7 @@ Measured on the club site with the `tools/ms-hosting-check` plugin and over SSH.
 | D8 | Member data | No machine-readable list exists. The app keeps a minimal list. A full member database is a separate project. |
 | D9 | Rule settings | The loan rule values (D5) are kept in one central place, so the developer can change them easily. No admin UI for them for now. |
 
-## 11. Implementation status (updated 2026-10-25)
+## 11. Implementation status (updated 2026-10-26)
 
 **Read this first in a new session.** Sections 1–10 are the design. This section
 says what is built, how to run it, and what was learned along the way.
@@ -412,7 +412,7 @@ says what is built, how to run it, and what was learned along the way.
 
 - **LocalWP** site `maschaspielt` in `~/Code/Local Sites/maschaspielt` (WP root `app/public`). Created with Apache (the live site is Apache) and MySQL 8.0 (Local offered no MariaDB; the live DB is MariaDB 10.11, so use only portable SQL through `$wpdb`/`dbDelta`) and PHP 8.3. Single site, not multisite.
 - The plugin folder is **symlinked** into `app/public/wp-content/plugins/mascha-ausleihe`, so edits apply immediately.
-- Admin pages: `http://maschaspielt.local/wp-admin/admin.php?page=maus` (overview), `maus-catalog`, `maus-import`. There are no member-facing pages yet. There is no separate subdomain.
+- Admin pages: `http://maschaspielt.local/wp-admin/admin.php?page=maus` (overview), `maus-catalog`, `maus-import`, `maus-members`. Member pages: `http://maschaspielt.local/ausleihe` and `http://maschaspielt.local/c/<code>`. There is no separate subdomain.
 - Not installed on the dev Mac: Node, Docker, WP-CLI, a MySQL client. PHP 8.x and Composer are present. Use Local's shell or its Database tab (Adminer) for DB access and `wp` commands. Plain PHP unit checks run with `php`, but anything touching `$wpdb` can only be tested inside Local.
 - Deploy to the live site: upload `plugin/mascha-ausleihe` over SFTP/SSH into the WordPress `wp-content/plugins/`, then activate (WP-CLI is available on the host). SSH details are in the developer's notes, not in this repo. The WordPress root on the server is `/home/www/public`.
 
@@ -429,9 +429,10 @@ says what is built, how to run it, and what was learned along the way.
 | Sticker reprint | **Ausleihe → Catalog**: tick copies (also retired ones) and press "Print selected stickers". Same printable page, optional "skip N labels" to fill gaps on a partly used sheet |
 | Members (`class-members.php`, admin page "Members") | Admin page with list and CSV import (columns `name, email, role, language, external_id`; comma or semicolon; matched by lowercase email; preview then apply; only adds/updates, never removes or deactivates; sends no mail). No UI yet to deactivate a member or add one by hand |
 | Login (`class-auth.php`, `class-front.php`, `class-mail.php`, `class-i18n.php`) | Magic link, no passwords. Pages: `/ausleihe` (placeholder home), `/ausleihe/login`, `/ausleihe/login/confirm`, `/ausleihe/logout`, rendered as standalone mobile pages (not the WP theme), German/English by member language or browser. Link: random 256-bit token, only the SHA-256 hash is stored (`wp_maus_login_tokens`), single use, valid 15 min. Opening the link only shows a confirm button; signing in is a POST, so mail scanners cannot use it up. Session: random cookie token, hash in `wp_maus_sessions`, 30 days, HttpOnly, SameSite=Lax, Secure on HTTPS. Same response for unknown/inactive/valid addresses (no account enumeration). Rate limit: 3 links per address and 10 per IP per 15 min (transients). Logout and later state-changing forms use `MAUS_Auth::csrf_token()`. **Untested in WordPress yet** |
+| Copy page (`/c/<code>`, `MAUS_Front::copy_page`, `class-copies.php`) | The sticker URL. Invalid code (checksum) → "code not valid" page. Lower case or O/I/L → redirect to the canonical code. Not signed in → login with `next=/c/<code>`; the `next` path travels through the login form and the emailed link and is restricted to `/c/<code>` or `/ausleihe` (no open redirect). Shows game name + copy label, expansion/players/playtime/year, image if set, and one status: retired ("no longer in the collection"), on loan to me (due date, overdue warning), on loan to someone (borrower name and due date for admins only, D3), not lendable ("on-site only"), or available (with "ask the lending team" for new members). No buttons yet: borrow/return comes next. Reservation holds are not shown yet, because nothing writes reservations so far. **Untested in WordPress yet** |
 | First real import | 537 active copies from the club's BGG collection |
 
-**Not built yet:** adding/deactivating single members, welcome emails, the `/c/<code>` page and in-app scanner, borrow/return,
+**Not built yet:** adding/deactivating single members, welcome emails, the in-app scanner, borrow/return,
 renewals, reservations, issue reports, reminder emails, BGG API sync, German/English
 UI texts (admin strings are English for now), GDPR notice and retention.
 
@@ -457,8 +458,8 @@ Columns include `objectname`, `objectid`, `collid`, `own`, `itemtype`,
 
 ### 11.6 Suggested next steps
 
-1. Test the sticker page: print one sheet on plain paper (Canon G550, A4, 100% scale, no margins), cut out a few labels and scan them with several phones. Adjust size/font in `class-stickers.php`. The `/c/<code>` page does not exist yet, so scanned codes lead to a 404 until it is built. Use black-only printing (pigment black ink is the water-resistant one on this printer) and consider clear laminate or overlay film for wear.
-2. Test the login on Local (import `docs/sample-data/members-sample.csv`; Local catches outgoing mail). Needs pretty permalinks (Settings → Permalinks not "Plain"). Then build the `/c/<code>` page (needs login, shows the copy and its status), member add/deactivate, welcome email.
+1. Test the sticker page: print one sheet on plain paper (Canon G550, A4, 100% scale, no margins), cut out a few labels and scan them with several phones. Adjust size/font in `class-stickers.php`. Stickers encode the live domain, so on Local open `http://maschaspielt.local/c/<code>` by hand. Use black-only printing (pigment black ink is the water-resistant one on this printer) and consider clear laminate or overlay film for wear.
+2. Test the login on Local (import `docs/sample-data/members-sample.csv`; Local catches outgoing mail). Needs pretty permalinks (Settings → Permalinks not "Plain"). Then test the `/c/<code>` page: signed out (lands back on the copy after the magic link), as new/trusted/admin, with a retired copy, a mistyped code and a lower-case code. Loans can only be inserted by hand (Adminer) until borrow/return exists. Then member add/deactivate, welcome email.
 3. Borrow/return by scan, with loan rules from `MAUS_Settings`.
 4. Reservations, reminder emails and the cron-job.org pinger.
 5. BGG API sync once the token arrives. Add `invlocation` and `comment` handling to the import if wanted.
