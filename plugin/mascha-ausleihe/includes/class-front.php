@@ -102,7 +102,7 @@ final class MAUS_Front {
         if ($code === null) {
             $l = MAUS_Auth::current_member()?->language ?? MAUS_I18n::detect();
             status_header(404);
-            self::page($l, MAUS_I18n::t('code_invalid_title', $l), '<p>' . esc_html(MAUS_I18n::t('code_invalid_text', $l)) . '</p>' . self::home_link($l));
+            self::page($l, MAUS_I18n::t('code_invalid_title', $l), '<p>' . esc_html(MAUS_I18n::t('code_invalid_text', $l)) . '</p>');
             return;
         }
         if ($code !== $raw) {
@@ -117,7 +117,7 @@ final class MAUS_Front {
         $copy = MAUS_Copies::find_by_code($code);
         if (!$copy) {
             status_header(404);
-            self::page($l, $code, '<p>' . esc_html(MAUS_I18n::t('copy_unknown', $l)) . '</p>' . self::home_link($l));
+            self::page($l, $code, '<p>' . esc_html(MAUS_I18n::t('copy_unknown', $l)) . '</p>');
             return;
         }
         if ($post) {
@@ -255,8 +255,7 @@ final class MAUS_Front {
             . ($facts ? '<p class="muted">' . esc_html(implode(' · ', $facts)) . '</p>' : '')
             . '<p class="muted">' . esc_html(MAUS_I18n::t('copy_code', $l, $code)) . '</p>'
             . $status . $actions . $issues
-            . ($copy->retired ? '' : '<p><a href="' . esc_url(home_url('/c/' . $code . '?report=1')) . '">' . esc_html(MAUS_I18n::t('report_link', $l)) . '</a></p>')
-            . self::home_link($l);
+            . ($copy->retired ? '' : '<p><a href="' . esc_url(home_url('/c/' . $code . '?report=1')) . '">' . esc_html(MAUS_I18n::t('report_link', $l)) . '</a></p>');
         self::page($l, $title, $body);
     }
 
@@ -358,7 +357,7 @@ final class MAUS_Front {
         foreach ($open as $issue) {
             $list .= self::issue_item($issue, $l, '/ausleihe/issues', true);
         }
-        self::page($l, MAUS_I18n::t('issues_title', $l), $notice . $list . ($open ? '</ul>' : '') . self::home_link($l));
+        self::page($l, MAUS_I18n::t('issues_title', $l), $notice . $list . ($open ? '</ul>' : ''));
     }
 
     /**
@@ -497,8 +496,23 @@ final class MAUS_Front {
         return wp_date($lang === 'de' ? 'd.m.Y' : 'd/m/Y', strtotime($utc . ' UTC'));
     }
 
-    public static function home_link(string $lang): string {
-        return '<p><a href="' . esc_url(home_url('/ausleihe')) . '">' . esc_html(MAUS_I18n::t('to_home', $lang)) . '</a></p>';
+    /**
+     * Footer fixed to the bottom of the screen, so the way back needs no
+     * scrolling: $links (path => label) and the overview link, which is left
+     * out on the overview itself and on the sign-in pages.
+     */
+    private static function footer(string $lang, array $links): string {
+        if (!in_array((string) get_query_var('maus_route'), ['home', 'login', 'login/confirm', 'logout'], true)) {
+            $links['/ausleihe'] = MAUS_I18n::t('to_home', $lang);
+        }
+        if (!$links) {
+            return '';
+        }
+        $html = '';
+        foreach ($links as $path => $label) {
+            $html .= '<a href="' . esc_url(home_url($path)) . '">' . esc_html($label) . '</a>';
+        }
+        return '<footer><nav>' . $html . '</nav></footer>';
     }
 
     public static function go(string $path): void {
@@ -506,13 +520,18 @@ final class MAUS_Front {
         exit;
     }
 
-    public static function page(string $lang, string $title, string $body): void {
+    /** @param array $footer extra footer links, path => label */
+    public static function page(string $lang, string $title, string $body, array $footer = []): void {
+        $footer_html = self::footer($lang, $footer);
         header('Content-Type: text/html; charset=utf-8');
         echo '<!doctype html><html lang="' . esc_attr($lang) . '"><head><meta charset="utf-8">'
-            . '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            . '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
             . '<meta name="robots" content="noindex"><title>' . esc_html($title) . ' – Mascha spielt</title>'
             . '<style>'
             . 'body{margin:0;font:16px/1.5 system-ui,sans-serif;background:#f6f4ef;color:#222}'
+            . 'body.has-footer main{padding-bottom:5rem}'
+            . 'footer{position:fixed;left:0;right:0;bottom:0;z-index:2;background:#fff;border-top:1px solid #ddd;padding:.75rem 1rem calc(.75rem + env(safe-area-inset-bottom))}'
+            . 'footer nav{max-width:26rem;margin:0 auto;display:flex;justify-content:space-between;gap:1rem}footer a{font-weight:600;text-decoration:none}'
             . 'main{max-width:26rem;margin:0 auto;padding:1.5rem 1rem}'
             . 'h1{font-size:1.4rem}label{display:block;margin:1rem 0 .25rem}'
             . 'input,textarea,select{width:100%;box-sizing:border-box;font:inherit;padding:.6rem;border:1px solid #888;border-radius:6px}'
@@ -521,9 +540,16 @@ final class MAUS_Front {
             . '.warn{background:#fff3cd;padding:.6rem;border-radius:6px}a{color:#2c5d4a}'
             . '.ok{background:#e1efe8;padding:.6rem;border-radius:6px}.muted{color:#666;margin:.25rem 0}'
             . 'dialog{width:min(26rem,calc(100% - 2rem));box-sizing:border-box;border:0;border-radius:8px;padding:1rem}dialog::backdrop{background:rgba(0,0,0,.4)}'
+            . '.stick{position:sticky;top:0;z-index:1;background:#f6f4ef;padding:.5rem 0;border-bottom:1px solid #ddd}'
+            . '.chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem}'
+            . 'button.chip{width:auto;margin:0;padding:.35rem .7rem;border-radius:999px;font-size:.9em;background:#fff;color:#2c5d4a;border:1px solid #2c5d4a}'
+            . 'button.chip[aria-pressed=true]{background:#2c5d4a;color:#fff}#member-count{margin:.4rem 0 0}'
+            . 'table{width:100%;border-collapse:collapse;background:#fff}th{background:#ece9e1;text-align:left}'
+            . 'th,td{padding:.45rem .5rem;border-bottom:1px solid #eee;vertical-align:top}.num{text-align:right}'
+            . '.email{color:#666;font-size:.85em;word-break:break-all}tr.off td{opacity:.6}#member-none{padding:.5rem}'
             . '.check{display:flex;gap:.5rem;align-items:center}.check input{width:auto}div.warn p{margin:0}'
             . 'h2{font-size:1.1rem;margin-top:1.5rem}.loans{padding:0;list-style:none}.loans li{margin:.6rem 0}.late{color:#a33}'
             . 'img{display:block;max-width:100%;max-height:14rem;margin:0 auto 1rem;border-radius:6px}'
-            . '</style></head><body><main><h1>' . esc_html($title) . '</h1>' . $body . '</main></body></html>';
+            . '</style></head><body' . ($footer_html !== '' ? ' class="has-footer"' : '') . '><main><h1>' . esc_html($title) . '</h1>' . $body . '</main>' . $footer_html . '</body></html>';
     }
 }

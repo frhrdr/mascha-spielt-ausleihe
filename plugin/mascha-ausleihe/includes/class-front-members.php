@@ -33,7 +33,7 @@ final class MAUS_Front_Members {
         $member = $sub === 'new' ? null : MAUS_Members::find((int) $sub);
         if ($sub !== 'new' && !$member) {
             status_header(404);
-            MAUS_Front::page($admin->language, '404', '<p>' . esc_html(MAUS_I18n::t('not_found', $admin->language)) . '</p>' . self::back_link($admin->language));
+            MAUS_Front::page($admin->language, '404', '<p>' . esc_html(MAUS_I18n::t('not_found', $admin->language)) . '</p>', self::back_link($admin->language));
             return;
         }
         $post ? self::member_post($member, $admin) : self::form_page($member, $admin);
@@ -54,28 +54,58 @@ final class MAUS_Front_Members {
                 . '</div>'
             : '';
 
+        // The page scrolls as a whole; a bar with search, quick filters and the count stays pinned to the top.
         $members = MAUS_Members::with_loan_counts(false);
-        $list = '<ul class="loans" id="members">';
+        $counts = ['all' => count($members), 'unwelcomed' => 0, 'loans' => 0]; // one quick filter each
+        $rows = '';
         foreach ($members as $mem) {
-            $meta = [$mem->email, MAUS_I18n::t('role_' . $mem->role, $l), MAUS_I18n::t('language_' . $mem->language, $l)];
-            if ((int) $mem->open_loans) {
-                $meta[] = MAUS_I18n::t('n_borrowed', $l, $mem->open_loans);
+            $tags = [];
+            if (!(int) $mem->active) {
+                $tags[] = 'inactive';
+            } elseif (!$mem->welcomed_at) {
+                $tags[] = 'unwelcomed';
             }
-            $flags = !(int) $mem->active ? MAUS_I18n::t('inactive', $l) : ($mem->welcomed_at ? '' : MAUS_I18n::t('not_welcomed', $l));
-            $list .= '<li data-search="' . esc_attr(mb_strtolower($mem->name . ' ' . $mem->email)) . '">'
-                . '<a href="' . esc_url(home_url('/ausleihe/members/' . (int) $mem->id)) . '">' . esc_html($mem->name) . '</a>'
-                . ($flags !== '' ? ' <span class="late">' . esc_html($flags) . '</span>' : '')
-                . '<br><span class="muted">' . esc_html(implode(' · ', $meta)) . '</span></li>';
+            if ((int) $mem->open_loans) {
+                $tags[] = 'loans';
+            }
+            foreach ($tags as $tag) {
+                if (isset($counts[$tag])) {
+                    $counts[$tag]++;
+                }
+            }
+            $flags = in_array('inactive', $tags, true) ? MAUS_I18n::t('inactive', $l) : (in_array('unwelcomed', $tags, true) ? MAUS_I18n::t('not_welcomed', $l) : '');
+            $rows .= '<tr data-search="' . esc_attr(mb_strtolower($mem->name . ' ' . $mem->email)) . '" data-tags="' . esc_attr(implode(' ', $tags)) . '"' . ((int) $mem->active ? '' : ' class="off"') . '>'
+                . '<td><a href="' . esc_url(home_url('/ausleihe/members/' . (int) $mem->id)) . '">' . esc_html($mem->name) . '</a>'
+                . '<br><span class="email">' . esc_html($mem->email) . '</span>'
+                . ($flags !== '' ? '<br><span class="late">' . esc_html($flags) . '</span>' : '') . '</td>'
+                . '<td>' . esc_html(MAUS_I18n::t('role_' . $mem->role, $l)) . '<br><span class="muted">' . esc_html(strtoupper($mem->language)) . '</span></td>'
+                . '<td class="num">' . (int) $mem->open_loans . '</td></tr>';
         }
-        $list .= '</ul>';
 
-        // Client-side filter; the list is short (< 100 members).
-        $filter = '<input type="search" placeholder="' . esc_attr(MAUS_I18n::t('filter_placeholder', $l)) . '" aria-label="' . esc_attr(MAUS_I18n::t('filter_placeholder', $l)) . '"'
-            . ' oninput="var q=this.value.toLowerCase();document.querySelectorAll(\'#members li\').forEach(function(li){li.hidden=li.dataset.search.indexOf(q)<0})">';
+        $chips = '';
+        foreach ($counts as $tag => $n) {
+            $chips .= '<button type="button" class="chip" data-tag="' . $tag . '" aria-pressed="' . ($tag === 'all' ? 'true' : 'false') . '" onclick="mausChip(this)">'
+                . esc_html(MAUS_I18n::t('chip_' . $tag, $l)) . ' ' . $n . '</button>';
+        }
+        $list = '<div class="stick">'
+            . '<input id="member-search" type="search" autocomplete="off" placeholder="' . esc_attr(MAUS_I18n::t('filter_placeholder', $l)) . '"'
+            . ' aria-label="' . esc_attr(MAUS_I18n::t('filter_placeholder', $l)) . '" oninput="mausFilter()">'
+            . '<div class="chips">' . $chips . '</div>'
+            . '<p class="muted" id="member-count" aria-live="polite">' . $counts['all'] . ' / ' . $counts['all'] . '</p></div>'
+            . '<table id="members"><thead><tr>'
+            . '<th>' . esc_html(MAUS_I18n::t('name_label', $l)) . '</th><th>' . esc_html(MAUS_I18n::t('role_label', $l)) . '</th>'
+            . '<th class="num" title="' . esc_attr(MAUS_I18n::t('col_loans_long', $l)) . '">' . esc_html(MAUS_I18n::t('col_loans', $l)) . '</th>'
+            . '</tr></thead><tbody>' . $rows . '</tbody></table>'
+            . '<p class="muted" id="member-none" hidden>' . esc_html(MAUS_I18n::t('no_match', $l)) . '</p>'
+            . '<script>var mausTag="all";'
+            . 'function mausChip(b){mausTag=b.dataset.tag;document.querySelectorAll(".chip").forEach(function(c){c.setAttribute("aria-pressed",c===b)});mausFilter()}'
+            . 'function mausFilter(){var q=document.getElementById("member-search").value.trim().toLowerCase(),n=0,rows=document.querySelectorAll("#members tbody tr");'
+            . 'rows.forEach(function(r){var hit=r.dataset.search.indexOf(q)>=0&&(mausTag==="all"||(" "+r.dataset.tags+" ").indexOf(" "+mausTag+" ")>=0);r.hidden=!hit;if(hit)n++});'
+            . 'document.getElementById("member-count").textContent=n+" / "+rows.length;document.getElementById("member-none").hidden=n>0}</script>';
 
         $body = $notice . $welcome_box
             . '<p><a href="' . esc_url(home_url('/ausleihe/members/new')) . '">' . esc_html(MAUS_I18n::t('add_member', $l)) . '</a></p>'
-            . $filter . $list . MAUS_Front::home_link($l);
+            . $list;
         MAUS_Front::page($l, MAUS_I18n::t('members_title', $l, count($members)), $body);
     }
 
@@ -123,8 +153,7 @@ final class MAUS_Front_Members {
         if ($member) {
             $body .= self::member_extras($member, $admin, $path);
         }
-        $body .= self::back_link($l);
-        MAUS_Front::page($l, $member ? $member->name : MAUS_I18n::t('add_member_title', $l), $body);
+        MAUS_Front::page($l, $member ? $member->name : MAUS_I18n::t('add_member_title', $l), $body, self::back_link($l));
     }
 
     /** Welcome email, open loans and (de)activation on the edit page. */
@@ -210,7 +239,8 @@ final class MAUS_Front_Members {
         return '';
     }
 
-    private static function back_link(string $l): string {
-        return '<p><a href="' . esc_url(home_url('/ausleihe/members')) . '">' . esc_html(MAUS_I18n::t('to_members', $l)) . '</a></p>';
+    /** Footer link back to the list. */
+    private static function back_link(string $l): array {
+        return ['/ausleihe/members' => MAUS_I18n::t('to_members', $l)];
     }
 }
