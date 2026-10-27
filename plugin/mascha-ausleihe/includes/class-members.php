@@ -27,15 +27,83 @@ final class MAUS_Members {
         )) ?: null;
     }
 
-    /** Active members by name, each with open_loans (count), for the admin desk flow. */
-    public static function active_with_loan_counts(): array {
+    /** Members by name, each with open_loans (count). A subquery, not GROUP BY, so MariaDB's strict mode is fine. */
+    public static function with_loan_counts(bool $active_only = true): array {
         global $wpdb;
         return $wpdb->get_results(
-            'SELECT m.id, m.name, m.email, COUNT(l.id) AS open_loans
-             FROM ' . MAUS_DB::table('members') . ' m
-             LEFT JOIN ' . MAUS_DB::table('loans') . ' l ON l.member_id = m.id AND l.returned_at IS NULL
-             WHERE m.active = 1 GROUP BY m.id, m.name, m.email ORDER BY m.name'
+            'SELECT m.*, (SELECT COUNT(*) FROM ' . MAUS_DB::table('loans') . ' l WHERE l.member_id = m.id AND l.returned_at IS NULL) AS open_loans
+             FROM ' . MAUS_DB::table('members') . ' m' . ($active_only ? ' WHERE m.active = 1' : '') . ' ORDER BY m.active DESC, m.name'
         );
+    }
+
+    /**
+     * Adds ($member null) or updates a member from the admin form. An admin
+     * cannot take the admin role away from themselves, so the club always
+     * keeps one. @return int|string member id, or an error key
+     */
+    public static function save(?object $member, array $input, object $admin) {
+        global $wpdb;
+        $row = [
+            'name'     => trim((string) ($input['name'] ?? '')),
+            'email'    => strtolower(trim((string) ($input['email'] ?? ''))),
+            'role'     => (string) ($input['role'] ?? ''),
+            'language' => (string) ($input['language'] ?? ''),
+        ];
+        if ($row['name'] === '' || mb_strlen($row['name']) > 150 || !is_email($row['email'])
+            || !in_array($row['role'], self::ROLES, true) || !in_array($row['language'], self::LANGUAGES, true)) {
+            return 'member_fields';
+        }
+        $other = self::find_by_email($row['email']);
+        if ($other && (!$member || (int) $other->id !== (int) $member->id)) {
+            return 'email_taken';
+        }
+        if ($member && (int) $member->id === (int) $admin->id && $row['role'] !== 'admin') {
+            return 'own_role';
+        }
+        if ($member) {
+            return $wpdb->update(MAUS_DB::table('members'), $row, ['id' => $member->id]) === false ? 'failed' : (int) $member->id;
+        }
+        $ok = $wpdb->insert(MAUS_DB::table('members'), $row + ['active' => 1, 'created_at' => gmdate('Y-m-d H:i:s')]);
+        return $ok ? (int) $wpdb->insert_id : 'failed';
+    }
+
+    /**
+     * Deactivating keeps the member and their loan history but ends their
+     * sessions and unused links; they can no longer sign in. @return true|string
+     */
+    public static function set_active(object $member, bool $active, object $admin) {
+        global $wpdb;
+        if (!$active && (int) $member->id === (int) $admin->id) {
+            return 'own_account';
+        }
+        if ($wpdb->update(MAUS_DB::table('members'), ['active' => $active ? 1 : 0], ['id' => $member->id]) === false) {
+            return 'failed';
+        }
+        if (!$active) {
+            MAUS_Auth::revoke((int) $member->id);
+        }
+        return true;
+    }
+
+    /** Welcome email with a sign-in link (§5.5); records when it went out. */
+    public static function send_welcome(object $member): bool {
+        global $wpdb;
+        if (!(int) $member->active) {
+            return false;
+        }
+        $url = MAUS_Auth::issue_link($member, MAUS_Settings::get('welcome_link_days') * DAY_IN_SECONDS);
+        if (!MAUS_Mail::send_welcome($member, $url)) {
+            error_log('maus: welcome mail could not be sent to member ' . $member->id);
+            return false;
+        }
+        $wpdb->update(MAUS_DB::table('members'), ['welcomed_at' => gmdate('Y-m-d H:i:s')], ['id' => $member->id]);
+        return true;
+    }
+
+    /** Active members who never got a welcome email, e.g. after a CSV import. */
+    public static function unwelcomed(): array {
+        global $wpdb;
+        return $wpdb->get_results('SELECT * FROM ' . MAUS_DB::table('members') . ' WHERE active = 1 AND welcomed_at IS NULL ORDER BY name');
     }
 
     /**

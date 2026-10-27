@@ -243,6 +243,7 @@ final class MAUS_Admin {
         }
 
         echo '<h2>Import from CSV</h2><p>Columns: <code>name, email, role, language, external_id</code>. Role is <code>new</code>, <code>trusted</code> or <code>admin</code> (default new), language <code>de</code> or <code>en</code> (default de). Comma or semicolon separated. Members are matched by email. The import adds and updates only, it never removes anyone and sends no emails.</p>';
+        echo '<p>Adding single members, deactivating, and sending welcome emails (also to everyone imported here) happen on the member pages for admin members: <a href="' . esc_url(home_url('/ausleihe/members')) . '">/ausleihe/members</a>.</p>';
         echo '<form method="post" enctype="multipart/form-data">';
         wp_nonce_field('maus_members_upload');
         echo '<input type="file" name="csv" accept=".csv,text/csv" required> ';
@@ -251,10 +252,11 @@ final class MAUS_Admin {
 
         $members = $wpdb->get_results('SELECT * FROM ' . MAUS_DB::table('members') . ' ORDER BY name');
         printf('<h2>%d members</h2>', count($members));
-        echo '<table class="widefat striped"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Language</th><th>External ID</th><th>Active</th></tr></thead><tbody>';
+        echo '<table class="widefat striped"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Language</th><th>External ID</th><th>Active</th><th>Welcomed</th></tr></thead><tbody>';
         foreach ($members as $m) {
-            printf('<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
-                esc_html($m->name), esc_html($m->email), esc_html($m->role), esc_html($m->language), esc_html((string) $m->external_id), $m->active ? 'yes' : 'no');
+            printf('<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                esc_html($m->name), esc_html($m->email), esc_html($m->role), esc_html($m->language), esc_html((string) $m->external_id), $m->active ? 'yes' : 'no',
+                $m->welcomed_at ? esc_html(wp_date('Y-m-d', strtotime($m->welcomed_at . ' UTC'))) : '');
         }
         echo '</tbody></table></div>';
     }

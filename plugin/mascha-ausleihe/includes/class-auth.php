@@ -34,20 +34,32 @@ final class MAUS_Auth {
 
         $member = MAUS_Members::find_by_email($email);
         if ($member && (int) $member->active === 1) {
-            $token = bin2hex(random_bytes(32));
-            global $wpdb;
-            $wpdb->insert(MAUS_DB::table('login_tokens'), [
-                'token_hash' => hash('sha256', $token),
-                'member_id'  => $member->id,
-                'expires_at' => gmdate('Y-m-d H:i:s', time() + MAUS_Settings::get('login_link_minutes') * 60),
-                'created_at' => gmdate('Y-m-d H:i:s'),
-            ]);
-            $url = home_url('/ausleihe/login/confirm') . '?token=' . $token . ($next !== '' ? '&next=' . rawurlencode($next) : '');
+            $url = self::issue_link($member, MAUS_Settings::get('login_link_minutes') * MINUTE_IN_SECONDS, $next);
             if (!MAUS_Mail::send_login_link($member, $url)) {
                 error_log('maus: login mail could not be sent to member ' . $member->id);
             }
         }
         return 'sent';
+    }
+
+    /** Stores a new single-use token for the member and returns its sign-in URL. */
+    public static function issue_link(object $member, int $valid_seconds, string $next = ''): string {
+        global $wpdb;
+        $token = bin2hex(random_bytes(32));
+        $wpdb->insert(MAUS_DB::table('login_tokens'), [
+            'token_hash' => hash('sha256', $token),
+            'member_id'  => $member->id,
+            'expires_at' => gmdate('Y-m-d H:i:s', time() + $valid_seconds),
+            'created_at' => gmdate('Y-m-d H:i:s'),
+        ]);
+        return home_url('/ausleihe/login/confirm') . '?token=' . $token . ($next !== '' ? '&next=' . rawurlencode($next) : '');
+    }
+
+    /** Ends all sessions and unused links of a member, e.g. when deactivated. */
+    public static function revoke(int $member_id): void {
+        global $wpdb;
+        $wpdb->delete(MAUS_DB::table('sessions'), ['member_id' => $member_id]);
+        $wpdb->delete(MAUS_DB::table('login_tokens'), ['member_id' => $member_id, 'used_at' => null]);
     }
 
     /** True if the token exists, is unused and not expired. Does not consume it. */

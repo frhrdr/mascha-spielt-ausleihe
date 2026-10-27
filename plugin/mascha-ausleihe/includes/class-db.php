@@ -6,7 +6,7 @@ if (!defined('ABSPATH')) {
 
 final class MAUS_DB {
 
-    private const VERSION = '3';
+    private const VERSION = '4';
     private const OPTION  = 'maus_db_version';
 
     public static function table(string $name): string {
@@ -81,6 +81,7 @@ final class MAUS_DB {
   language varchar(5) NOT NULL DEFAULT 'de',
   active tinyint(1) NOT NULL DEFAULT 1,
   external_id varchar(100) DEFAULT NULL,
+  welcomed_at datetime DEFAULT NULL,
   created_at datetime NOT NULL,
   PRIMARY KEY  (id),
   UNIQUE KEY email (email)

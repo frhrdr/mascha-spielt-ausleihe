@@ -15,6 +15,15 @@ final class MAUS_Mail {
         );
     }
 
+    public static function send_welcome(object $member, string $url): bool {
+        $lang = $member->language;
+        return wp_mail(
+            $member->email,
+            MAUS_I18n::t('welcome_subject', $lang),
+            MAUS_I18n::t('welcome_body', $lang, $member->name, $url, MAUS_Settings::get('welcome_link_days'))
+        );
+    }
+
     /** Someone closed another member's loan because the game was back on the shelf. */
     public static function found_on_shelf(object $loan, object $finder): void {
         $game = trim($loan->name . ' ' . $loan->label);

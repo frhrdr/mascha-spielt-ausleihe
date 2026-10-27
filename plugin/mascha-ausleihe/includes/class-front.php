@@ -45,6 +45,10 @@ final class MAUS_Front {
         header('Referrer-Policy: no-referrer'); // login tokens travel in the URL
         $post = ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST';
 
+        if (preg_match('~^members(?:/(new|\d+))?$~', $route, $match)) {
+            MAUS_Front_Members::route($match[1] ?? '', $post);
+            exit;
+        }
         switch ($route) {
             case 'home':
                 self::home();
@@ -82,7 +86,8 @@ final class MAUS_Front {
         $role = MAUS_I18n::t('role_' . $m->role, $l);
         $body = '<p>' . esc_html(MAUS_I18n::t('role_line', $l, $role)) . '</p>'
             . self::my_loans($m)
-            . ($m->role === 'admin' ? '<p><a href="' . esc_url(home_url('/ausleihe/issues')) . '">' . esc_html(MAUS_I18n::t('open_issues', $l, MAUS_Issues::count_open())) . '</a></p>' : '')
+            . ($m->role === 'admin' ? '<p><a href="' . esc_url(home_url('/ausleihe/issues')) . '">' . esc_html(MAUS_I18n::t('open_issues', $l, MAUS_Issues::count_open())) . '</a><br>'
+                . '<a href="' . esc_url(home_url('/ausleihe/members')) . '">' . esc_html(MAUS_I18n::t('members_link', $l)) . '</a></p>' : '')
             . '<p>' . esc_html(MAUS_I18n::t('home_scan', $l)) . '</p>'
             . '<form method="post" action="' . esc_url(home_url('/ausleihe/logout')) . '">'
             . '<input type="hidden" name="csrf" value="' . esc_attr(MAUS_Auth::csrf_token()) . '">'
@@ -320,7 +325,7 @@ final class MAUS_Front {
     /** Active members with their open loan count, for the desk flow. */
     private static function member_select(int $selected, string $l): string {
         $html = '<select id="member" name="member" required>' . ($selected ? '' : '<option value="">' . esc_html(MAUS_I18n::t('choose_member', $l)) . '</option>');
-        foreach (MAUS_Members::active_with_loan_counts() as $mem) {
+        foreach (MAUS_Members::with_loan_counts() as $mem) {
             $html .= '<option value="' . (int) $mem->id . '"' . selected($selected, (int) $mem->id, false) . '>'
                 . esc_html(MAUS_I18n::t('member_option', $l, $mem->name, $mem->email, $mem->open_loans)) . '</option>';
         }
@@ -386,7 +391,7 @@ final class MAUS_Front {
     }
 
     /** One button in its own small form with the CSRF token. */
-    private static function button_form(string $path, string $do, string $label, array $fields = [], string $class = '', string $confirm = ''): string {
+    public static function button_form(string $path, string $do, string $label, array $fields = [], string $class = '', string $confirm = ''): string {
         $html = '<form method="post" action="' . esc_url(home_url($path)) . '"'
             . ($confirm !== '' ? ' onsubmit="return confirm(' . esc_attr(wp_json_encode($confirm)) . ')"' : '') . '>'
             . '<input type="hidden" name="csrf" value="' . esc_attr(MAUS_Auth::csrf_token()) . '">'
@@ -465,7 +470,7 @@ final class MAUS_Front {
         self::page($l, MAUS_I18n::t('invalid_title', $l), $body);
     }
 
-    /* ------------------------------ helpers ------------------------------ */
+    /* ---------------- helpers (the public ones are shared with MAUS_Front_Members) ---------------- */
 
     private static function my_loans(object $m): string {
         $l = $m->language;
@@ -485,23 +490,23 @@ final class MAUS_Front {
     /** Where to land after sign-in: only our own pages, never an outside URL. */
     private static function next_path(): string {
         $next = (string) wp_unslash($_POST['next'] ?? $_GET['next'] ?? '');
-        return preg_match('~^/(c/[0-9A-Z]{5}|ausleihe(/issues)?)$~', $next) ? $next : '/ausleihe';
+        return preg_match('~^/(c/[0-9A-Z]{5}|ausleihe(/issues|/members)?)$~', $next) ? $next : '/ausleihe';
     }
 
-    private static function date(string $utc, string $lang): string {
+    public static function date(string $utc, string $lang): string {
         return wp_date($lang === 'de' ? 'd.m.Y' : 'd/m/Y', strtotime($utc . ' UTC'));
     }
 
-    private static function home_link(string $lang): string {
+    public static function home_link(string $lang): string {
         return '<p><a href="' . esc_url(home_url('/ausleihe')) . '">' . esc_html(MAUS_I18n::t('to_home', $lang)) . '</a></p>';
     }
 
-    private static function go(string $path): void {
+    public static function go(string $path): void {
         wp_safe_redirect(home_url($path));
         exit;
     }
 
-    private static function page(string $lang, string $title, string $body): void {
+    public static function page(string $lang, string $title, string $body): void {
         header('Content-Type: text/html; charset=utf-8');
         echo '<!doctype html><html lang="' . esc_attr($lang) . '"><head><meta charset="utf-8">'
             . '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -516,6 +521,7 @@ final class MAUS_Front {
             . '.warn{background:#fff3cd;padding:.6rem;border-radius:6px}a{color:#2c5d4a}'
             . '.ok{background:#e1efe8;padding:.6rem;border-radius:6px}.muted{color:#666;margin:.25rem 0}'
             . 'dialog{width:min(26rem,calc(100% - 2rem));box-sizing:border-box;border:0;border-radius:8px;padding:1rem}dialog::backdrop{background:rgba(0,0,0,.4)}'
+            . '.check{display:flex;gap:.5rem;align-items:center}.check input{width:auto}div.warn p{margin:0}'
             . 'h2{font-size:1.1rem;margin-top:1.5rem}.loans{padding:0;list-style:none}.loans li{margin:.6rem 0}.late{color:#a33}'
             . 'img{display:block;max-width:100%;max-height:14rem;margin:0 auto 1rem;border-radius:6px}'
             . '</style></head><body><main><h1>' . esc_html($title) . '</h1>' . $body . '</main></body></html>';
