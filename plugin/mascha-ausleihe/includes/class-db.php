@@ -6,7 +6,7 @@ if (!defined('ABSPATH')) {
 
 final class MAUS_DB {
 
-    private const VERSION = '4';
+    private const VERSION = '5';
     private const OPTION  = 'maus_db_version';
 
     public static function table(string $name): string {
@@ -99,6 +99,9 @@ final class MAUS_DB {
   returned_by bigint(20) unsigned DEFAULT NULL,
   return_note text,
   complete tinyint(1) DEFAULT NULL,
+  reminded_before_at datetime DEFAULT NULL,
+  reminded_due_at datetime DEFAULT NULL,
+  reminded_overdue_at datetime DEFAULT NULL,
   PRIMARY KEY  (id),
   KEY copy_open (copy_id,returned_at),
   KEY member_open (member_id,returned_at)
@@ -113,8 +116,10 @@ final class MAUS_DB {
   notified_at datetime DEFAULT NULL,
   hold_until datetime DEFAULT NULL,
   held_copy_id bigint(20) unsigned DEFAULT NULL,
+  closed_at datetime DEFAULT NULL,
   PRIMARY KEY  (id),
   KEY game_status (game_id,status),
+  KEY held_copy_id (held_copy_id),
   KEY member_id (member_id)
 ) $charset;";
 

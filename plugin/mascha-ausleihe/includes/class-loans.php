@@ -8,8 +8,9 @@ if (!defined('ABSPATH')) {
  * Borrow, renew and return by scan (design §5.2, §5.4). Every method returns
  * true or an error key that MAUS_I18n can show as 'err_<key>'.
  *
- * Reservations are not checked yet: nothing creates them so far. Borrow and
- * renew must start checking them when reservations are built.
+ * Reservations (MAUS_Reservations): a held copy can only be borrowed by the
+ * member it is held for, nobody can renew while someone waits for the game,
+ * and a copy that becomes free goes to the first in the queue.
  */
 final class MAUS_Loans {
 
@@ -55,6 +56,10 @@ final class MAUS_Loans {
     /** @return true|string */
     private static function create(object $copy, object $member, object $by) {
         global $wpdb;
+        $blocked = MAUS_Reservations::blocks($copy, (int) $member->id);
+        if ($blocked) {
+            return $blocked;
+        }
         // Lock the copy row so two people tapping at once cannot both borrow it.
         $wpdb->query('START TRANSACTION');
         $wpdb->query($wpdb->prepare('SELECT id FROM ' . MAUS_DB::table('copies') . ' WHERE id = %d FOR UPDATE', $copy->id));
@@ -71,7 +76,11 @@ final class MAUS_Loans {
             'due_at'         => gmdate('Y-m-d H:i:s', $now + MAUS_Settings::get('loan_period_days') * DAY_IN_SECONDS),
         ]);
         $wpdb->query($ok ? 'COMMIT' : 'ROLLBACK');
-        return $ok ? true : 'failed';
+        if (!$ok) {
+            return 'failed';
+        }
+        MAUS_Reservations::on_borrow($copy, (int) $member->id);
+        return true;
     }
 
     /**
@@ -93,7 +102,7 @@ final class MAUS_Loans {
         }
         $due->setTime(23, 59, 59)->setTimezone(new DateTimeZone('UTC'));
         $updated = $wpdb->query($wpdb->prepare(
-            'UPDATE ' . MAUS_DB::table('loans') . ' SET member_id = %d, due_at = %s WHERE id = %d AND returned_at IS NULL',
+            'UPDATE ' . MAUS_DB::table('loans') . ' SET member_id = %d, due_at = %s, reminded_before_at = NULL, reminded_due_at = NULL, reminded_overdue_at = NULL WHERE id = %d AND returned_at IS NULL',
             $member->id, $due->format('Y-m-d H:i:s'), $loan->id
         ));
         return $updated === false ? 'failed' : true; // 0 rows is fine: nothing changed
@@ -109,7 +118,11 @@ final class MAUS_Loans {
             return 'not_allowed';
         }
         $deleted = $wpdb->delete(MAUS_DB::table('loans'), ['id' => $loan->id, 'returned_at' => null]);
-        return $deleted === 1 ? true : 'already_returned';
+        if ($deleted !== 1) {
+            return 'already_returned';
+        }
+        MAUS_Reservations::assign_copy((int) $loan->copy_id);
+        return true;
     }
 
     /** Renewing opens reminder_days_before_due days before the due date (also when overdue). */
@@ -132,9 +145,12 @@ final class MAUS_Loans {
         if (time() < self::renew_opens_at($loan)) {
             return 'too_early';
         }
+        if (MAUS_Reservations::has_waiting((int) $loan->game_id)) {
+            return 'reserved_renew';
+        }
         $from = max(time(), strtotime($loan->due_at . ' UTC'));
         $updated = $wpdb->query($wpdb->prepare(
-            'UPDATE ' . MAUS_DB::table('loans') . ' SET due_at = %s, extended_count = extended_count + 1
+            'UPDATE ' . MAUS_DB::table('loans') . ' SET due_at = %s, extended_count = extended_count + 1, reminded_before_at = NULL, reminded_due_at = NULL, reminded_overdue_at = NULL
              WHERE id = %d AND returned_at IS NULL AND extended_count = %d',
             gmdate('Y-m-d H:i:s', $from + MAUS_Settings::get('loan_period_days') * DAY_IN_SECONDS),
             $loan->id, $loan->extended_count
@@ -164,6 +180,7 @@ final class MAUS_Loans {
         if (!$own && $member->role !== 'admin') {
             MAUS_Mail::found_on_shelf(self::find((int) $loan->id), $member);
         }
+        MAUS_Reservations::assign_copy((int) $loan->copy_id);
         return true;
     }
 
@@ -227,7 +244,7 @@ final class MAUS_Loans {
     public static function find(int $id): ?object {
         global $wpdb;
         return $wpdb->get_row($wpdb->prepare(
-            'SELECT l.*, m.name AS member_name, c.qr_code, c.label, g.name
+            'SELECT l.*, m.name AS member_name, c.qr_code, c.label, c.game_id, g.name
              FROM ' . MAUS_DB::table('loans') . ' l
              JOIN ' . MAUS_DB::table('members') . ' m ON m.id = l.member_id
              JOIN ' . MAUS_DB::table('copies') . ' c ON c.id = l.copy_id

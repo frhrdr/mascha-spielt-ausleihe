@@ -13,7 +13,7 @@ final class MAUS_Front {
     private const REWRITE_VERSION = '2';
 
     /** Error keys from MAUS_Loans that the copy page shows as 'err_<key>'. */
-    private const ERRORS = ['not_allowed', 'not_lendable', 'limit', 'taken', 'no_renewals', 'too_early', 'already_returned', 'already_resolved', 'empty_note', 'empty_report', 'no_member', 'bad_date', 'failed'];
+    private const ERRORS = ['not_allowed', 'not_lendable', 'limit', 'taken', 'no_renewals', 'too_early', 'already_returned', 'already_resolved', 'empty_note', 'reserved', 'reserved_renew', 'already_reserved', 'already_borrowing', 'available_now', 'reservation_gone', 'empty_report', 'no_member', 'bad_date', 'failed'];
 
     public static function boot(): void {
         add_action('init', [self::class, 'register_rules']);
@@ -86,6 +86,7 @@ final class MAUS_Front {
         $role = MAUS_I18n::t('role_' . $m->role, $l);
         $body = '<p>' . esc_html(MAUS_I18n::t('role_line', $l, $role)) . '</p>'
             . self::my_loans($m)
+            . self::my_reservations($m)
             . ($m->role === 'admin' ? '<p><a href="' . esc_url(home_url('/ausleihe/issues')) . '">' . esc_html(MAUS_I18n::t('open_issues', $l, MAUS_Issues::count_open())) . '</a><br>'
                 . '<a href="' . esc_url(home_url('/ausleihe/members')) . '">' . esc_html(MAUS_I18n::t('members_link', $l)) . '</a></p>' : '')
             . '<p>' . esc_html(MAUS_I18n::t('home_scan', $l)) . '</p>'
@@ -129,7 +130,9 @@ final class MAUS_Front {
         // Right after a return: "Is the game complete?" (D7). Skipping is fine.
         $answer_loan = $done === 'returned' ? MAUS_Loans::awaiting_answer((int) ($_GET['loan'] ?? 0), $m) : null;
         if ($answer_loan) {
+            $hold = MAUS_Reservations::hold_on((int) $copy->id);
             $body = '<p class="ok">' . esc_html(MAUS_I18n::t('done_returned', $l)) . '</p>'
+                . ($hold ? '<p class="warn"><strong>' . esc_html(MAUS_I18n::t('returned_held', $l, $hold->member_name)) . '</strong></p>' : '')
                 . '<p>' . esc_html(MAUS_I18n::t('complete_question', $l)) . '</p>'
                 . self::action_form($code, 'complete', MAUS_I18n::t('complete_yes', $l), ['loan' => $answer_loan->id])
                 . '<p><a href="' . esc_url(home_url('/c/' . $code . '?report=1&loan=' . $answer_loan->id)) . '">' . esc_html(MAUS_I18n::t('complete_no', $l)) . '</a></p>'
@@ -189,7 +192,7 @@ final class MAUS_Front {
         $err = (string) ($_GET['err'] ?? '');
         if (in_array($err, self::ERRORS, true)) {
             $notice = '<p class="warn">' . esc_html(MAUS_I18n::t('err_' . $err, $l, MAUS_Settings::get('max_concurrent_loans'))) . '</p>';
-        } elseif (in_array($done, ['borrowed', 'renewed', 'returned', 'thanks', 'reported', 'corrected', 'cancelled', 'resolved'], true)) {
+        } elseif (in_array($done, ['borrowed', 'renewed', 'returned', 'thanks', 'reported', 'corrected', 'cancelled', 'resolved', 'reserved', 'reservation_cancelled'], true)) {
             $notice = '<p class="ok">' . esc_html(MAUS_I18n::t('done_' . $done, $l)) . '</p>';
         }
 
@@ -225,8 +228,20 @@ final class MAUS_Front {
             }
         } elseif (!$copy->lendable) {
             $status = '<p class="warn">' . esc_html(MAUS_I18n::t('status_onsite', $l)) . '</p>';
+        } elseif (($hold = MAUS_Reservations::hold_on((int) $copy->id)) && (int) $hold->member_id !== (int) $m->id) {
+            // Held for someone else: only they, or an admin for them, can borrow it (§5.4 option b).
+            $until = self::date($hold->hold_until, $l);
+            $status = '<p class="warn">' . esc_html($is_admin
+                ? MAUS_I18n::t('status_held_admin', $l, $hold->member_name, $until)
+                : MAUS_I18n::t('status_held_other', $l, $until)) . '</p>';
+            if ($is_admin) {
+                $actions = self::action_form($code, 'borrow_for', MAUS_I18n::t('borrow_for_holder', $l, $hold->member_name), ['member' => $hold->member_id])
+                    . self::action_form($code, 'cancel_reservation', MAUS_I18n::t('cancel_hold', $l), ['reservation' => $hold->id], 'secondary', MAUS_I18n::t('cancel_hold_confirm', $l, $hold->member_name));
+            }
         } else {
-            $status = '<p class="ok">' . esc_html(MAUS_I18n::t('status_available', $l)) . '</p>';
+            $status = $hold
+                ? '<p class="ok">' . esc_html(MAUS_I18n::t('status_held_mine', $l, self::date($hold->hold_until, $l))) . '</p>'
+                : '<p class="ok">' . esc_html(MAUS_I18n::t('status_available', $l)) . '</p>';
             $actions = MAUS_Loans::can_self_serve($m)
                 ? self::action_form($code, 'borrow', MAUS_I18n::t('borrow', $l))
                     . '<p class="muted">' . esc_html(MAUS_I18n::t('borrow_hint', $l, self::date(gmdate('Y-m-d H:i:s', time() + MAUS_Settings::get('loan_period_days') * DAY_IN_SECONDS), $l))) . '</p>'
@@ -239,6 +254,8 @@ final class MAUS_Front {
                     . '<button class="secondary">' . esc_html(MAUS_I18n::t('borrow_for', $l)) . '</button></form>';
             }
         }
+
+        $reservations = $copy->retired || !$copy->lendable ? '' : self::reservation_box($copy, $m, $code, $loan);
 
         // Admins see and resolve this copy's open reports here.
         $issues = '';
@@ -254,7 +271,7 @@ final class MAUS_Front {
             . ($copy->image_url ? '<img src="' . esc_url($copy->image_url) . '" alt="">' : '')
             . ($facts ? '<p class="muted">' . esc_html(implode(' · ', $facts)) . '</p>' : '')
             . '<p class="muted">' . esc_html(MAUS_I18n::t('copy_code', $l, $code)) . '</p>'
-            . $status . $actions . $issues
+            . $status . $actions . $reservations . $issues
             . ($copy->retired ? '' : '<p><a href="' . esc_url(home_url('/c/' . $code . '?report=1')) . '">' . esc_html(MAUS_I18n::t('report_link', $l)) . '</a></p>');
         self::page($l, $title, $body);
     }
@@ -294,6 +311,14 @@ final class MAUS_Front {
                 $result = MAUS_Issues::resolve((int) ($_POST['issue'] ?? 0), $m, (string) wp_unslash($_POST['note'] ?? ''));
                 $query = 'done=resolved';
                 break;
+            case 'reserve':
+                $result = MAUS_Reservations::reserve($copy, $m);
+                $query = 'done=reserved';
+                break;
+            case 'cancel_reservation':
+                $result = MAUS_Reservations::cancel((int) ($_POST['reservation'] ?? 0), $m);
+                $query = 'done=reservation_cancelled';
+                break;
             case 'renew':
                 $result = $loan ? MAUS_Loans::renew($loan, $m) : 'already_returned';
                 $query = 'done=renewed';
@@ -319,6 +344,44 @@ final class MAUS_Front {
                 self::go($back);
         }
         self::go($back . '?' . ($result === true ? $query : 'err=' . $result));
+    }
+
+    /**
+     * The member's reservation for this game (place in the queue, or the
+     * copy held for them), or a Reserve button when no copy is available.
+     * Admins also see the whole queue and can remove entries.
+     */
+    private static function reservation_box(object $copy, object $m, string $code, ?object $loan): string {
+        $l = $m->language;
+        $html = '';
+        $mine = MAUS_Reservations::active_for((int) $copy->game_id, (int) $m->id);
+        if ($mine && $mine->status === 'held' && (int) $mine->held_copy_id !== (int) $copy->id) {
+            $held = MAUS_Reservations::for_member((int) $m->id);
+            foreach ($held as $r) {
+                if ((int) $r->id === (int) $mine->id) {
+                    $html .= '<p class="ok">' . esc_html(MAUS_I18n::t('held_elsewhere', $l, self::date($r->hold_until, $l))) . ' '
+                        . '<a href="' . esc_url(home_url('/c/' . $r->held_code)) . '">' . esc_html(trim($r->name . ' ' . $r->held_label) . ' (' . $r->held_code . ')') . '</a></p>';
+                }
+            }
+        } elseif ($mine && $mine->status === 'waiting') {
+            $html .= '<p class="ok">' . esc_html(MAUS_I18n::t('reserved_position', $l, MAUS_Reservations::position($mine))) . '</p>'
+                . self::action_form($code, 'cancel_reservation', MAUS_I18n::t('cancel_reservation', $l), ['reservation' => $mine->id], 'secondary', MAUS_I18n::t('cancel_reservation_confirm', $l));
+        } elseif (!$mine && MAUS_Reservations::cannot_reserve($copy, $m) === null) {
+            $html .= self::action_form($code, 'reserve', MAUS_I18n::t('reserve', $l), [], 'secondary')
+                . '<p class="muted">' . esc_html(MAUS_I18n::t('reserve_hint', $l, MAUS_Settings::get('reservation_hold_days'))) . '</p>';
+        }
+
+        $queue = $m->role === 'admin' ? MAUS_Reservations::queue((int) $copy->game_id) : [];
+        if ($queue) {
+            $html .= '<h2>' . esc_html(MAUS_I18n::t('queue_title', $l)) . '</h2><ul class="loans">';
+            foreach ($queue as $i => $r) {
+                $html .= '<li>' . ($i + 1) . '. ' . esc_html($r->member_name) . ' <span class="muted">' . esc_html(self::date($r->created_at, $l)) . '</span>'
+                    . self::action_form($code, 'cancel_reservation', MAUS_I18n::t('remove_from_queue', $l), ['reservation' => $r->id], 'secondary', MAUS_I18n::t('cancel_hold_confirm', $l, $r->member_name))
+                    . '</li>';
+            }
+            $html .= '</ul>';
+        }
+        return $html;
     }
 
     /** Active members with their open loan count, for the desk flow. */
@@ -482,6 +545,24 @@ final class MAUS_Front {
             $overdue = strtotime($loan->due_at . ' UTC') < time();
             $html .= '<li><a href="' . esc_url(home_url('/c/' . $loan->qr_code)) . '">' . esc_html(trim($loan->name . ' ' . $loan->label)) . '</a><br>'
                 . '<span class="' . ($overdue ? 'late' : 'muted') . '">' . esc_html(MAUS_I18n::t($overdue ? 'due_overdue' : 'due_by', $l, self::date($loan->due_at, $l))) . '</span></li>';
+        }
+        return $html . '</ul>';
+    }
+
+    private static function my_reservations(object $m): string {
+        $l = $m->language;
+        $list = MAUS_Reservations::for_member((int) $m->id);
+        if (!$list) {
+            return '';
+        }
+        $html = '<h2>' . esc_html(MAUS_I18n::t('my_reservations', $l)) . '</h2><ul class="loans">';
+        foreach ($list as $r) {
+            if ($r->status === 'held') {
+                $html .= '<li><a href="' . esc_url(home_url('/c/' . $r->held_code)) . '">' . esc_html(trim($r->name . ' ' . $r->held_label)) . '</a><br>'
+                    . '<span class="ok">' . esc_html(MAUS_I18n::t('held_until', $l, self::date($r->hold_until, $l))) . '</span></li>';
+            } else {
+                $html .= '<li>' . esc_html($r->name) . '<br><span class="muted">' . esc_html(MAUS_I18n::t('reserved_position', $l, MAUS_Reservations::position($r))) . '</span></li>';
+            }
         }
         return $html . '</ul>';
     }

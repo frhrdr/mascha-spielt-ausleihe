@@ -9,6 +9,7 @@ final class MAUS_Plugin {
     public static function boot(): void {
         MAUS_DB::maybe_install();
         MAUS_Front::boot();
+        MAUS_Jobs::boot();
         if (is_admin()) {
             MAUS_Admin::boot();
             MAUS_Stickers::boot();
@@ -22,6 +23,7 @@ final class MAUS_Plugin {
     }
 
     public static function deactivate(): void {
+        MAUS_Jobs::unschedule();
         flush_rewrite_rules();
     }
 }

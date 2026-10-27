@@ -16,6 +16,7 @@ final class MAUS_Admin {
         add_menu_page('Ausleihe', 'Ausleihe', self::CAP, 'maus', [self::class, 'render_home'], 'dashicons-book-alt');
         add_submenu_page('maus', 'Catalog', 'Catalog', self::CAP, 'maus-catalog', [self::class, 'render_catalog']);
         add_submenu_page('maus', 'Loans', 'Loans', self::CAP, 'maus-loans', [self::class, 'render_loans']);
+        add_submenu_page('maus', 'Reservations', 'Reservations', self::CAP, 'maus-reservations', [self::class, 'render_reservations']);
         add_submenu_page('maus', 'Reported issues', 'Issues', self::CAP, 'maus-issues', [self::class, 'render_issues']);
         add_submenu_page('maus', 'QR stickers', 'Stickers', self::CAP, 'maus-stickers', ['MAUS_Stickers', 'render_page']);
         add_submenu_page('maus', 'Members', 'Members', self::CAP, 'maus-members', [self::class, 'render_members']);
@@ -41,6 +42,28 @@ final class MAUS_Admin {
             esc_url(admin_url('admin.php?page=maus-issues')),
             $count('issues', 'resolved_at IS NULL')
         );
+
+        // Background job (reminders, holds): shows whether the cron-job.org pinger works.
+        echo '<h2>Background job</h2>';
+        if (isset($_POST['maus_run_jobs']) && check_admin_referer('maus_run_jobs')) {
+            $r = MAUS_Jobs::run(true);
+            echo '<div class="notice notice-success"><p>' . esc_html(isset($r['skipped'])
+                ? 'Skipped: ' . $r['skipped'] . '.'
+                : sprintf('Done. Reminders sent: %d. Admin summary sent: %s.', $r['reminders'], $r['digest'] ? 'yes' : 'no')) . '</p></div>';
+        }
+        $last = (int) get_option(MAUS_Jobs::LAST_RUN);
+        $next = wp_next_scheduled(MAUS_Jobs::HOOK);
+        printf(
+            '<p>Last run: %s. Next run due: %s. It runs hourly via WP-Cron; on the live site cron-job.org must call <code>%s</code>.</p>',
+            $last ? esc_html(wp_date('Y-m-d H:i', $last)) . ($last < time() - 3 * HOUR_IN_SECONDS ? ' <strong style="color:#b32d2e">(more than 3 hours ago: is the pinger running?)</strong>' : '') : '<strong>never</strong>',
+            $next ? esc_html(wp_date('Y-m-d H:i', $next)) : 'not scheduled',
+            esc_html(site_url('wp-cron.php'))
+        );
+        printf('<p>Scheduled runs send emails between %d:00 and %d:00 only; <em>Run now</em> sends them at any time.</p>', MAUS_Settings::get('mail_from_hour'), MAUS_Settings::get('mail_until_hour'));
+        echo '<form method="post">';
+        wp_nonce_field('maus_run_jobs');
+        submit_button('Run now', 'secondary', 'maus_run_jobs', false);
+        echo '</form>';
         echo '</div>';
     }
 
@@ -160,6 +183,41 @@ final class MAUS_Admin {
                 (int) $r->extended_count, esc_html($date($r->returned_at)),
                 esc_html($r->returned_by && (int) $r->returned_by !== (int) $r->member_id ? (string) $r->returned_by_name : ''),
                 $r->complete === null ? '' : ($r->complete ? 'yes' : '<strong>no</strong>')
+            );
+        }
+        echo '</tbody></table>';
+        if (!$rows) {
+            echo '<p>None.</p>';
+        }
+        echo '</div>';
+    }
+
+    /** Waiting and held reservations, read-only; members and admin members change them on /c/<code>. */
+    public static function render_reservations(): void {
+        global $wpdb;
+        if (!current_user_can(self::CAP)) {
+            wp_die('Not allowed.');
+        }
+        $rows = $wpdb->get_results(
+            'SELECT r.*, g.name, m.name AS member_name, c.qr_code AS held_code,
+                    (SELECT c2.qr_code FROM ' . MAUS_DB::table('copies') . ' c2 WHERE c2.game_id = r.game_id AND c2.retired = 0 ORDER BY c2.id LIMIT 1) AS any_code
+             FROM ' . MAUS_DB::table('reservations') . ' r
+             JOIN ' . MAUS_DB::table('games') . ' g ON g.id = r.game_id
+             JOIN ' . MAUS_DB::table('members') . ' m ON m.id = r.member_id
+             LEFT JOIN ' . MAUS_DB::table('copies') . " c ON c.id = r.held_copy_id
+             WHERE r.status IN ('waiting','held') ORDER BY g.name, r.status = 'held' DESC, r.created_at, r.id"
+        );
+        echo '<div class="wrap"><h1>Reservations</h1>';
+        echo '<p>Open the game (code link) as an admin member to remove a reservation or borrow a held copy for the member.</p>';
+        echo '<table class="widefat striped"><thead><tr><th>Game</th><th>Member</th><th>Status</th><th>Reserved</th><th>Held copy</th><th>Held until</th></tr></thead><tbody>';
+        $date = fn(?string $utc) => $utc ? wp_date('Y-m-d', strtotime($utc . ' UTC')) : '';
+        foreach ($rows as $r) {
+            $code = $r->held_code ?: $r->any_code;
+            printf(
+                '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                $code ? '<a href="' . esc_url(home_url('/c/' . $code)) . '">' . esc_html($r->name) . '</a>' : esc_html($r->name),
+                esc_html($r->member_name), esc_html($r->status), esc_html($date($r->created_at)),
+                $r->held_code ? '<code>' . esc_html($r->held_code) . '</code>' : '', esc_html($date($r->hold_until))
             );
         }
         echo '</tbody></table>';

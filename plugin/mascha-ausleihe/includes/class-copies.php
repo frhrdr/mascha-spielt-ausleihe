@@ -19,13 +19,14 @@ final class MAUS_Copies {
         )) ?: null;
     }
 
-    /** The copy's loan that is not returned yet, with the borrower's name. */
+    /** The copy's loan that is not returned yet, with the borrower's name and the game id. */
     public static function open_loan(int $copy_id): ?object {
         global $wpdb;
         return $wpdb->get_row($wpdb->prepare(
-            'SELECT l.*, m.name AS member_name
+            'SELECT l.*, m.name AS member_name, c.game_id
              FROM ' . MAUS_DB::table('loans') . ' l
              JOIN ' . MAUS_DB::table('members') . ' m ON m.id = l.member_id
+             JOIN ' . MAUS_DB::table('copies') . ' c ON c.id = l.copy_id
              WHERE l.copy_id = %d AND l.returned_at IS NULL
              ORDER BY l.checked_out_at DESC LIMIT 1',
             $copy_id
