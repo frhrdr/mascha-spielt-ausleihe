@@ -214,8 +214,9 @@ one (name, email, role, language).
 
 - **Invite only.** An admin adds a member (name + email + role), and the member
   gets a welcome email with a magic link. Members cannot register themselves.
-- With < 100 members, adding them one by one is fine. There is no bulk import in
-  the MVP.
+- With < 100 members, adding them one by one is fine. A CSV import exists for
+  the initial list (§11.3); its members get their welcome email later, with one
+  "send to all who have none yet" button.
 - A real club member database is a **separate project**. Keep the member model
   small and give it an optional `external_id`, so it can later be filled or
   synced from that database instead of by hand.
@@ -234,9 +235,9 @@ one (name, email, role, language).
    - collid gone → mark the Copy retired. If the copy is on loan, flag it for an
      admin instead of retiring it.
    - changed game data → update it.
-4. Show the admin a **sync report** ("3 new, 1 removed, 12 updated") before
+3. Show the admin a **sync report** ("3 new, 1 removed, 12 updated") before
    applying it, or right after.
-5. *(Low priority, not needed yet.)* **Not lendable from BGG:** if a
+4. *(Low priority, not needed yet.)* **Not lendable from BGG:** if a
    collection item's comment contains "nicht zum ausleihen" (ignoring case),
    set the Copy to `lendable = false`. If the phrase disappears, set it back to
    lendable. Today every game can be lent, so this waits until such a game
@@ -423,14 +424,15 @@ says what is built, how to run it, and what was learned along the way.
 
 | Area | State |
 |---|---|
-| Settings (`class-settings.php`) | Loan rules from §5.4/D5 in one constant array (D9). Added two values: reminder 7 days before due (renewing opens at the same time), overdue reminders every 7 days |
+| Settings (`class-settings.php`) | Loan rules from §5.4/D5 in one constant array (D9). Added values: reminder 7 days before due (renewing opens at the same time), overdue reminders every 7 days, welcome link valid 7 days (`welcome_link_days`) |
 | Schema (`class-db.php`) | Tables `wp_maus_games`, `game_links`, `copies`, `members`, `loans`, `reservations`, `issues`, created by `dbDelta`, versioned through the option `maus_db_version` (bump `VERSION` to migrate). Datetimes are UTC. Only games and copies hold data so far; the rest are empty |
 | Copy IDs (`class-copy-id.php`) | 4 random Crockford-Base32 characters + 1 check character (e.g. `K7Q2X`). Data characters use only the first 31 symbols and the check is a weighted sum mod 31, which detects every single-character error and neighbour swap (verified over ~476k cases). `parse()` accepts a bare ID or a full URL (domain ignored), and maps O→0, I/L→1 |
 | CSV import (`class-csv-import.php`, admin page "CSV import") | BGG collection export → preview report → Apply. Identifies copies by `collid`. New copy gets a QR code. Duplicates get labels `#1`, `#2`. Copies missing from a later CSV are retired, except when on loan (flagged instead). Refuses an empty file. Re-importing the same file changes nothing (verified). Runs in one transaction |
 | Admin (`class-admin.php`) | Overview with counts, read-only **Catalog** list (filters: expansions, duplicates, retired; search by name or code), CSV import |
 | Stickers (`class-stickers.php`, admin page "Stickers") | Printable A4 sheets of 60 × 30 mm labels (3 × 9 = 27 per sheet) for plain inkjet sticker paper, cut by hand along light hairlines. QR (error correction M, ~22 mm) on the left, ID / copy label / game name on the right. QR codes are drawn in the browser with the bundled MIT-licensed `assets/qrcode.js` (qrcode-generator 1.4.4), so the server needs no library. The URL base is `qr_base_url` in `MAUS_Settings` (the live domain, never the local one). Options: only unprinted copies or all, skip N cells to reuse a partly used sheet. After printing, "Mark as printed" sets `sticker_printed_at`. Geometry constants are at the top of the class. **Untested in a browser and on paper yet** |
 | Sticker reprint | **Ausleihe → Catalog**: tick copies (also retired ones) and press "Print selected stickers". Same printable page, optional "skip N labels" to fill gaps on a partly used sheet |
-| Members (`class-members.php`, admin page "Members") | Admin page with list and CSV import (columns `name, email, role, language, external_id`; comma or semicolon; matched by lowercase email; preview then apply; only adds/updates, never removes or deactivates; sends no mail). No UI yet to deactivate a member or add one by hand |
+| Members (`class-members.php`, admin page "Members") | Admin page with list and CSV import (columns `name, email, role, language, external_id`; comma or semicolon; matched by lowercase email; preview then apply; only adds/updates, never removes or deactivates; sends no mail). The WP admin list also shows when each member was welcomed and links to the member pages below |
+| Member management (`class-front-members.php`, `/ausleihe/members`, admin members only, linked from their home page) | On the member pages, not WP admin, because lending-team volunteers have no WordPress login. **List** with a search box, role, language, open-loan count, "inactive" and "not welcomed yet" flags; inactive members last. **Add** (name, email, role, language; "send welcome email now" ticked by default) and **edit** (`/ausleihe/members/<id>`), with the member's open loans. Email must be unique; an admin cannot remove their own admin role or deactivate themselves, so the club keeps at least one admin. **Deactivate** keeps the member and the history, ends their sessions and unused sign-in links (`MAUS_Auth::revoke`); confirm dialog warns about open loans. **Reactivate** is one button. **Welcome email** (§5.5): a sign-in link valid 7 days, single use like any login link, plus how scanning works; `members.welcomed_at` (DB version 4) records when it went out. Send or resend per member, and **"Send to all N"** for active members who never got one (e.g. after the CSV import). Tested on Local (2026-10-27) |
 | Login (`class-auth.php`, `class-front.php`, `class-mail.php`, `class-i18n.php`) | Magic link, no passwords. Pages: `/ausleihe` (home: own loans, for admins a link to open reports), `/ausleihe/login`, `/ausleihe/login/confirm`, `/ausleihe/logout`, rendered as standalone mobile pages (not the WP theme), German/English by member language or browser. Link: random 256-bit token, only the SHA-256 hash is stored (`wp_maus_login_tokens`), single use, valid 15 min. Opening the link only shows a confirm button; signing in is a POST, so mail scanners cannot use it up. Session: random cookie token, hash in `wp_maus_sessions`, 30 days, HttpOnly, SameSite=Lax, Secure on HTTPS. Same response for unknown/inactive/valid addresses (no account enumeration). Rate limit: 3 links per address and 10 per IP per 15 min (transients). Logout and later state-changing forms use `MAUS_Auth::csrf_token()`. Tested on Local (2026-10-26) |
 | Copy page (`/c/<code>`, `MAUS_Front::copy_page`, `class-copies.php`) | The sticker URL. Invalid code (checksum) → "code not valid" page. Lower case or O/I/L → redirect to the canonical code. Not signed in → login with `next=/c/<code>`; the `next` path travels through the login form and the emailed link and is restricted to `/c/<code>` or `/ausleihe` (no open redirect). Shows game name + copy label, expansion/players/playtime/year, image if set, and one status: retired ("no longer in the collection"), on loan to me (due date, overdue warning), on loan to someone (borrower name and due date for admins only, D3), not lendable ("on-site only"), or available (with "ask the lending team" for new members). Buttons per status, see next row. Reservation holds are not shown yet, because nothing writes reservations so far. Tested on Local (2026-10-26) |
 | Borrow / return (`class-loans.php`, buttons on `/c/<code>`) | Trusted members and admins only; new members see "ask the lending team" (§4). **Borrow**: one tap, checks lendable and the 10-loan limit, locks the copy row (`SELECT … FOR UPDATE` in a transaction) so two simultaneous taps cannot both borrow; due in 28 days. **Renew**: own loan, up to 2 times, only from 7 days before the due date (`reminder_days_before_due`; earlier the page says from which date), new due date = old due date + 28 days (today + 28 if overdue). The renewal window was added after the Local test and is **not confirmed tested yet**. **Return**: own loan, one tap. **Found on shelf**: any trusted member or admin can close someone else's loan (with a JS confirm); `returned_by` records who, and all active admins get an email. Forms post the loan id, and the action only applies if that is still the open loan, so a stale page cannot close a newer loan. **Completeness (D7)**: after a return, "Is the game complete?" → Yes sets `loans.complete = 1`, No opens the report form and sets `complete = 0`, Skip leaves it `NULL`; open for the returner for 1 hour. **Report a problem**: link on every copy page, creates an `issues` row and emails the admins. Pages use POST → redirect → GET with `done=`/`err=` messages; every form carries `MAUS_Auth::csrf_token()`. `/ausleihe` lists the member's open loans with due dates. **Reservations are not checked** by borrow or renew yet (§11.6 step 4 must add that). Tested on Local (2026-10-26) |
@@ -438,7 +440,7 @@ says what is built, how to run it, and what was learned along the way.
 | Loans and issues in WP admin (**Ausleihe → Loans / Issues**) | Loans: open, overdue or latest returned, with renewals, who returned it (if not the borrower) and the completeness answer; changes happen on the copy page (code links open it). Issues: open or resolved (with date and resolving member), read-only. **Resolving** happens on the member pages, so `resolved_by` is always the signed-in admin member: `/ausleihe/issues` (all open reports, linked from the admin's home page with the open count) and the copy page (that copy's open reports), both with an **Erledigt … / Resolve …** button (`class-issues.php`). The button opens a dialog (`<dialog>`) that repeats the report and asks "What was done?" (required, stored in `issues.resolution_note`, DB version 3), with separate **Mark as resolved** and **Cancel** buttons so a single mis-tap cannot resolve a report. WP admin shows the note under Resolved. The overview shows open/overdue loans and open issues. Resolving with the dialog tested on Local (2026-10-26); the Loans list not confirmed yet |
 | First real import | 537 active copies from the club's BGG collection |
 
-**Not built yet:** adding/deactivating single members, welcome emails, the in-app scanner, reservations, reminder emails, BGG API sync, German/English
+**Not built yet:** the in-app scanner, reservations, reminder emails, BGG API sync, German/English
 UI texts (admin strings are English for now), GDPR notice and retention.
 
 ### 11.4 BGG CSV export format (verified with the real file)
@@ -465,10 +467,9 @@ Columns include `objectname`, `objectid`, `collid`, `own`, `itemtype`,
 
 1. Test the sticker page: print one sheet on plain paper (Canon G550, A4, 100% scale, no margins), cut out a few labels and scan them with several phones. Adjust size/font in `class-stickers.php`. Stickers encode the live domain, so on Local open `http://maschaspielt.local/c/<code>` by hand. Use black-only printing (pigment black ink is the water-resistant one on this printer) and consider clear laminate or overlay film for wear.
 2. Confirm on Local what is not tested yet: the renewal window (set a due date less than a week away with "Correct this loan"; the renew button appears, earlier the page says from when), and as an admin member the desk flow (borrow for a new member, record a return, correct borrower and due date, cancel a loan) and **Ausleihe → Loans**.
-3. Member add/deactivate in the admin UI, and the welcome email with a magic link (§5.5).
-4. Reservations, reminder emails and the cron-job.org pinger.
-5. BGG API sync once the token arrives. Add `invlocation` and `comment` handling to the import if wanted.
-6. Deploy to the live site once a usable slice works, and test mail and cron there.
+3. Reservations, reminder emails and the cron-job.org pinger.
+4. BGG API sync once the token arrives. Add `invlocation` and `comment` handling to the import if wanted.
+5. Deploy to the live site once a usable slice works, and test mail and cron there.
 
 ### 11.7 Copy IDs: capacity and lifecycle
 
