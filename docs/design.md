@@ -401,7 +401,7 @@ Measured on the club site with the `tools/ms-hosting-check` plugin and over SSH.
 | D10 | Held copies on the open shelf | Option (c) from §5.4: the returner is told "reserved for X, please put it on the reservation shelf", and the app blocks everyone except X (or an admin borrowing for X). |
 | D11 | Email times | Emails from the background job (reminders, hold expiry, admin summary) go out only between 8:00 and 20:00 local time. Emails caused by someone's action (sign-in link, "held for you" after a return) go out immediately. |
 
-## 11. Implementation status (updated 2026-10-26)
+## 11. Implementation status (updated 2026-10-29)
 
 **Read this first in a new session.** Sections 1–10 are the design. This section
 says what is built, how to run it, and what was learned along the way.
@@ -412,6 +412,7 @@ says what is built, how to run it, and what was learned along the way.
 |---|---|
 | `docs/design.md` | This document |
 | `plugin/mascha-ausleihe/` | The WordPress plugin (Option A). Main file `mascha-ausleihe.php`, classes in `includes/class-*.php`, prefix `MAUS_` |
+| `tools/deploy.sh` | Deploys the plugin to the live site over SSH (§11.2) |
 | `tools/ms-hosting-check/` | Throwaway diagnostics plugin. **Already used, deactivated and removed from the live site.** Keep only as a record |
 
 ### 11.2 Local development
@@ -420,7 +421,7 @@ says what is built, how to run it, and what was learned along the way.
 - The plugin folder is **symlinked** into `app/public/wp-content/plugins/mascha-ausleihe`, so edits apply immediately.
 - Admin pages: `http://maschaspielt.local/wp-admin/admin.php?page=maus` (overview), `maus-catalog`, `maus-import`, `maus-members`. Member pages: `http://maschaspielt.local/ausleihe` and `http://maschaspielt.local/c/<code>`. There is no separate subdomain.
 - Not installed on the dev Mac: Node, Docker, WP-CLI, a MySQL client. PHP 8.x and Composer are present. Use Local's shell or its Database tab (Adminer) for DB access and `wp` commands. Plain PHP unit checks run with `php`, but anything touching `$wpdb` can only be tested inside Local.
-- Deploy to the live site: upload `plugin/mascha-ausleihe` over SFTP/SSH into the WordPress `wp-content/plugins/`, then activate (WP-CLI is available on the host). SSH details are in the developer's notes, not in this repo. The WordPress root on the server is `/home/www/public`.
+- Deploy to the live site: run `tools/deploy.sh` (asks for the SSH password from the IONOS control panel). It streams the plugin over SSH with `tar` (scp/SFTP cannot see `/home/www/public` on this host), swaps the folder in one step, activates the plugin with WP-CLI and flushes the rewrite rules. Running it again updates the plugin and keeps the data. The WordPress root on the server is `/home/www/public`. If `wp` is not found in the SSH session, activate the plugin under **Plugins** in wp-admin instead.
 
 ### 11.3 Built so far
 
@@ -442,6 +443,8 @@ says what is built, how to run it, and what was learned along the way.
 | Background job (`class-jobs.php`, DB version 5) | WP-Cron event `maus_jobs`, hourly; on the live site it only runs when cron-job.org calls `wp-cron.php` (§11.5). Each run: expire holds that ran out (copy moves to the next in line, member gets an email), then, only between 8:00 and 20:00 (D11), **reminders**: 7 days before the due date (with the renew link), on the due date (also sent as the first overdue mail if runs were missed), then every 7 days while overdue; and on Mondays the **overdue summary** to all admins (once per week, `maus_digest_week` option). Every email is claimed in the database (`loans.reminded_before_at`, `reminded_due_at`, `reminded_overdue_at`) before sending, and a lock option prevents parallel runs, so late, missing or doubled runs send nothing twice. Renewing or correcting a loan resets its reminders. WP admin overview shows the last and next run (warns if the last one is over 3 hours ago) and has a **Run now** button for testing, which ignores the email hours. Tested on Local with Run now (2026-10-27): hold expiry and all three reminder kinds |
 | Desk flow (§5.3, on `/c/<code>` for members with role `admin`) | **Borrow for a member**: pick any active member (also `new`) from a list that shows each member's open-loan count; the loan limit does not apply (admins override, §4); `checked_out_by` is the admin. **Record return** of anyone's loan without the admin email that "found on shelf" sends. **Correct loan** (`?edit=1`): change borrower and due date (local date, due at 23:59 that day), or **cancel** a loan recorded by mistake, which deletes the row so it does not count as history. Tested on Local (2026-10-27) |
 | Loans and issues in WP admin (**Ausleihe → Loans / Issues**) | Loans: open, overdue or latest returned, with renewals, who returned it (if not the borrower) and the completeness answer; changes happen on the copy page (code links open it). Issues: open or resolved (with date and resolving member), read-only. **Resolving** happens on the member pages, so `resolved_by` is always the signed-in admin member: `/ausleihe/issues` (all open reports, linked from the admin's home page with the open count) and the copy page (that copy's open reports), both with an **Erledigt … / Resolve …** button (`class-issues.php`). The button opens a dialog (`<dialog>`) that repeats the report and asks "What was done?" (required, stored in `issues.resolution_note`, DB version 3), with separate **Mark as resolved** and **Cancel** buttons so a single mis-tap cannot resolve a report. WP admin shows the note under Resolved. The overview shows open/overdue loans and open issues. Tested on Local (Issues 2026-10-26, Loans 2026-10-27) |
+| Trial mode and feedback (`trial_mode` in `class-settings.php`, `class-feedback.php`, DB version 6) | See §11.9. Banner on every member page, "[Test]" plus a note in every email (all mail goes through `MAUS_Mail::send`). **Feedback geben** in the footer of every signed-in page opens `/ausleihe/feedback` with the page the member came from; entries are stored (`wp_maus_feedback`, with a copy of the member's name), emailed to the admins and listed in **Ausleihe → Feedback** with a CSV download (semicolons, UTF-8 BOM for Excel). The feedback link stays after the trial. Tested on Local (2026-10-29) |
+| Reset (**Ausleihe → Reset**, `MAUS_DB::reset_usage_data`) | Deletes loans, reservations, issues, members, sessions and sign-in links in one transaction, optionally the feedback too. Keeps games, copies, codes and sticker print dates, so printed stickers keep working, plus WordPress users and settings. Shows the row counts and needs `RESET` typed in. Tested on Local (2026-10-29) |
 | First real import | 537 active copies from the club's BGG collection |
 
 **Not built yet:** the in-app scanner, BGG API sync, German/English
@@ -471,7 +474,7 @@ Columns include `objectname`, `objectid`, `collid`, `own`, `itemtype`,
 
 1. Test the sticker page: print one sheet on plain paper (Canon G550, A4, 100% scale, no margins), cut out a few labels and scan them with several phones. Adjust size/font in `class-stickers.php`. Stickers encode the live domain, so on Local open `http://maschaspielt.local/c/<code>` by hand. Use black-only printing (pigment black ink is the water-resistant one on this printer) and consider clear laminate or overlay film for wear.
 2. BGG API sync once the token arrives (CSV import until then). Add `invlocation` and `comment` handling to the import if wanted.
-3. Deploy to the live site once a usable slice works, and test mail and cron there.
+3. Trial on the live site (§11.9).
 
 ### 11.7 Copy IDs: capacity and lifecycle
 
@@ -482,3 +485,16 @@ Columns include `objectname`, `objectid`, `collid`, `own`, `itemtype`,
 ### 11.8 Sample data
 
 `docs/sample-data/members-sample.csv`: 12 fictional members (2 admins, 5 trusted, 5 new; German and English; umlauts). `members-sample-semicolon-with-errors.csv`: semicolon-separated, exercises the update path (Anna's email in capitals and role change) and the error report (bad email, unknown role, unknown language, duplicate, missing name). All addresses are `@example.com`; to receive real test mail, edit one row.
+
+### 11.9 Trial phase and reset (from 2026-10-29)
+
+Goal: club members try the app on the live site and give feedback, **without** the app tracking real loans yet. Afterwards all usage data is deleted and the app starts fresh.
+
+1. **Deploy** with `tools/deploy.sh` (§11.2), `trial_mode` = `true`.
+2. **Catalog:** WP admin → **Ausleihe → CSV import** with the BGG export.
+3. **Members:** WP admin → **Ausleihe → Members** → CSV import of the testers. Include yourself with role `admin`.
+4. **Check email delivery first:** request a sign-in link for yourself at `/ausleihe/login` and, in Gmail, open the mail → ⋮ → **Show original**: `SPF: PASS` and `DKIM: PASS` should be listed (§11.5). If not, fix that before inviting anyone, or the welcome mails may land in spam.
+5. **Invite:** sign in, open `/ausleihe/members` → **Send to all N**.
+6. **Background job:** WP admin → Ausleihe overview → **Last run** should update hourly (cron-job.org pinger, §11.5).
+7. **During the trial** testers borrow, return, reserve and report with any game; nothing is physically tracked. Reminder emails really go out (marked [Test]), so test loans should be returned or cancelled. Feedback arrives by email and under **Ausleihe → Feedback**.
+8. **After the trial:** download the feedback CSV, make a database backup in the IONOS control panel, then **Ausleihe → Reset** (type `RESET`). Then set `trial_mode` to `false`, deploy again, re-import the real member list and send the welcome emails.
