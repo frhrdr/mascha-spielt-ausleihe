@@ -59,6 +59,9 @@ final class MAUS_Front {
             case 'issues':
                 self::issues_page($post);
                 break;
+            case 'feedback':
+                MAUS_Feedback::page($post);
+                break;
             case 'login':
                 $post ? self::login_post() : self::login_form();
                 break;
@@ -570,7 +573,7 @@ final class MAUS_Front {
     /** Where to land after sign-in: only our own pages, never an outside URL. */
     private static function next_path(): string {
         $next = (string) wp_unslash($_POST['next'] ?? $_GET['next'] ?? '');
-        return preg_match('~^/(c/[0-9A-Z]{5}|ausleihe(/issues|/members)?)$~', $next) ? $next : '/ausleihe';
+        return preg_match('~^/(c/[0-9A-Z]{5}|ausleihe(/issues|/members|/feedback)?)$~', $next) ? $next : '/ausleihe';
     }
 
     public static function date(string $utc, string $lang): string {
@@ -579,11 +582,16 @@ final class MAUS_Front {
 
     /**
      * Footer fixed to the bottom of the screen, so the way back needs no
-     * scrolling: $links (path => label) and the overview link, which is left
-     * out on the overview itself and on the sign-in pages.
+     * scrolling: $links (path => label), then for signed-in members the
+     * feedback link and the overview link (not on the overview itself).
      */
     private static function footer(string $lang, array $links): string {
-        if (!in_array((string) get_query_var('maus_route'), ['home', 'login', 'login/confirm', 'logout'], true)) {
+        $route = (string) get_query_var('maus_route');
+        $signed_in_page = !in_array($route, ['login', 'login/confirm', 'logout'], true) && MAUS_Auth::current_member();
+        if ($signed_in_page && $route !== 'feedback') {
+            $links[MAUS_Feedback::link_path()] = MAUS_I18n::t('feedback_link', $lang);
+        }
+        if ($signed_in_page && $route !== 'home') {
             $links['/ausleihe'] = MAUS_I18n::t('to_home', $lang);
         }
         if (!$links) {
@@ -611,8 +619,9 @@ final class MAUS_Front {
             . '<style>'
             . 'body{margin:0;font:16px/1.5 system-ui,sans-serif;background:#f6f4ef;color:#222}'
             . 'body.has-footer main{padding-bottom:5rem}'
+            . '.trial{background:#dbe8f5;color:#173a5e;padding:.6rem;border-radius:6px;font-size:.9em;margin:0 0 .5rem}'
             . 'footer{position:fixed;left:0;right:0;bottom:0;z-index:2;background:#fff;border-top:1px solid #ddd;padding:.75rem 1rem calc(.75rem + env(safe-area-inset-bottom))}'
-            . 'footer nav{max-width:26rem;margin:0 auto;display:flex;justify-content:space-between;gap:1rem}footer a{font-weight:600;text-decoration:none}'
+            . 'footer nav{max-width:26rem;margin:0 auto;display:flex;flex-wrap:wrap;justify-content:space-between;gap:.5rem 1rem}footer a{font-weight:600;text-decoration:none}'
             . 'main{max-width:26rem;margin:0 auto;padding:1.5rem 1rem}'
             . 'h1{font-size:1.4rem}label{display:block;margin:1rem 0 .25rem}'
             . 'input,textarea,select{width:100%;box-sizing:border-box;font:inherit;padding:.6rem;border:1px solid #888;border-radius:6px}'
@@ -631,6 +640,8 @@ final class MAUS_Front {
             . '.check{display:flex;gap:.5rem;align-items:center}.check input{width:auto}div.warn p{margin:0}'
             . 'h2{font-size:1.1rem;margin-top:1.5rem}.loans{padding:0;list-style:none}.loans li{margin:.6rem 0}.late{color:#a33}'
             . 'img{display:block;max-width:100%;max-height:14rem;margin:0 auto 1rem;border-radius:6px}'
-            . '</style></head><body' . ($footer_html !== '' ? ' class="has-footer"' : '') . '><main><h1>' . esc_html($title) . '</h1>' . $body . '</main>' . $footer_html . '</body></html>';
+            . '</style></head><body' . ($footer_html !== '' ? ' class="has-footer"' : '') . '><main>'
+            . (MAUS_Settings::get('trial_mode') ? '<p class="trial">' . esc_html(MAUS_I18n::t('trial_banner', $lang)) . '</p>' : '')
+            . '<h1>' . esc_html($title) . '</h1>' . $body . '</main>' . $footer_html . '</body></html>';
     }
 }

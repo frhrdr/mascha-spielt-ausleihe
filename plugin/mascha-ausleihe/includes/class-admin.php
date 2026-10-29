@@ -10,6 +10,7 @@ final class MAUS_Admin {
 
     public static function boot(): void {
         add_action('admin_menu', [self::class, 'menu']);
+        add_action('admin_post_maus_feedback_csv', [self::class, 'feedback_csv']);
     }
 
     public static function menu(): void {
@@ -21,6 +22,8 @@ final class MAUS_Admin {
         add_submenu_page('maus', 'QR stickers', 'Stickers', self::CAP, 'maus-stickers', ['MAUS_Stickers', 'render_page']);
         add_submenu_page('maus', 'Members', 'Members', self::CAP, 'maus-members', [self::class, 'render_members']);
         add_submenu_page('maus', 'BGG CSV import', 'CSV import', self::CAP, 'maus-import', [self::class, 'render_import']);
+        add_submenu_page('maus', 'Feedback', 'Feedback', self::CAP, 'maus-feedback', [self::class, 'render_feedback']);
+        add_submenu_page('maus', 'Reset after the trial', 'Reset', self::CAP, 'maus-reset', [self::class, 'render_reset']);
     }
 
     public static function render_home(): void {
@@ -190,6 +193,93 @@ final class MAUS_Admin {
             echo '<p>None.</p>';
         }
         echo '</div>';
+    }
+
+    /** Feedback from testers, newest first, with a CSV download. */
+    public static function render_feedback(): void {
+        if (!current_user_can(self::CAP)) {
+            wp_die('Not allowed.');
+        }
+        $rows = MAUS_Feedback::all();
+        echo '<div class="wrap"><h1>Feedback</h1>';
+        printf('<p>%d entries. Members give feedback with the link in the footer of every member page. ', count($rows));
+        echo '<a class="button" href="' . esc_url(wp_nonce_url(admin_url('admin-post.php?action=maus_feedback_csv'), 'maus_feedback_csv')) . '">Download CSV</a></p>';
+        echo '<table class="widefat striped"><thead><tr><th>Date</th><th>Member</th><th>Page</th><th>Feedback</th></tr></thead><tbody>';
+        foreach ($rows as $r) {
+            printf(
+                '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                esc_html(wp_date('Y-m-d H:i', strtotime($r->created_at . ' UTC'))),
+                esc_html($r->member_name) . ($r->member_email ? '<br><small>' . esc_html($r->member_email) . '</small>' : ''),
+                $r->page !== '' ? '<a href="' . esc_url(home_url($r->page)) . '">' . esc_html($r->page) . '</a>' : '',
+                nl2br(esc_html($r->text))
+            );
+        }
+        echo '</tbody></table>';
+        if (!$rows) {
+            echo '<p>None yet.</p>';
+        }
+        echo '</div>';
+    }
+
+    /** Semicolon-separated with BOM, so German Excel opens it correctly. */
+    public static function feedback_csv(): void {
+        if (!current_user_can(self::CAP) || !check_admin_referer('maus_feedback_csv')) {
+            wp_die('Not allowed.');
+        }
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="feedback-' . wp_date('Y-m-d') . '.csv"');
+        $out = fopen('php://output', 'w');
+        fwrite($out, "\xEF\xBB\xBF");
+        fputcsv($out, ['date', 'member', 'email', 'page', 'feedback'], ';', '"', '');
+        foreach (MAUS_Feedback::all() as $r) {
+            fputcsv($out, [wp_date('Y-m-d H:i', strtotime($r->created_at . ' UTC')), $r->member_name, (string) $r->member_email, $r->page, $r->text], ';', '"', '');
+        }
+        fclose($out);
+        exit;
+    }
+
+    /** Deletes all usage data after the trial; keeps the catalog and copy codes. */
+    public static function render_reset(): void {
+        if (!current_user_can(self::CAP)) {
+            wp_die('Not allowed.');
+        }
+        echo '<div class="wrap"><h1>Reset after the trial</h1>';
+        $with_feedback = !empty($_POST['with_feedback']);
+        if (isset($_POST['maus_reset'])) {
+            check_admin_referer('maus_reset');
+            if (trim((string) wp_unslash($_POST['confirm'] ?? '')) !== 'RESET') {
+                echo '<div class="notice notice-error"><p>Nothing was deleted: type RESET in capitals to confirm.</p></div>';
+            } else {
+                try {
+                    $deleted = MAUS_DB::reset_usage_data($with_feedback);
+                    $parts = [];
+                    foreach ($deleted as $table => $n) {
+                        $parts[] = "$n $table";
+                    }
+                    echo '<div class="notice notice-success"><p>Reset done. Deleted: ' . esc_html(implode(', ', $parts)) . '. '
+                        . 'Next: import the members (Ausleihe → Members), then sign in at /ausleihe as an admin member and send the welcome emails. '
+                        . 'Set <code>trial_mode</code> to false in <code>class-settings.php</code> and deploy, if the trial is over.</p></div>';
+                } catch (Throwable $e) {
+                    echo '<div class="notice notice-error"><p>' . esc_html($e->getMessage()) . ' Nothing was deleted.</p></div>';
+                }
+            }
+        }
+        $counts = MAUS_DB::usage_counts(true);
+        echo '<p>This deletes <strong>all usage data</strong> for a fresh start after the trial. It cannot be undone, so make a database backup first (IONOS control panel).</p>';
+        echo '<table class="widefat" style="max-width:32rem"><thead><tr><th>Deleted</th><th>Rows now</th></tr></thead><tbody>';
+        $labels = ['loans' => 'Loans (with their history)', 'reservations' => 'Reservations', 'issues' => 'Reported issues',
+            'members' => 'Members (re-import them afterwards)', 'sessions' => 'Sign-in sessions (everyone is signed out)', 'login_tokens' => 'Unused sign-in links', 'feedback' => 'Feedback (only if ticked below)'];
+        foreach ($counts as $table => $n) {
+            printf('<tr><td>%s</td><td>%d</td></tr>', esc_html($labels[$table] ?? $table), $n);
+        }
+        echo '</tbody></table>';
+        echo '<p><strong>Kept:</strong> games, copies and their codes (printed stickers keep working), sticker print dates, WordPress users and settings.</p>';
+        echo '<form method="post">';
+        wp_nonce_field('maus_reset');
+        echo '<p><label><input type="checkbox" name="with_feedback" value="1"> Also delete the feedback (download it first under Ausleihe → Feedback)</label></p>';
+        echo '<p><label>Type <code>RESET</code> to confirm: <input name="confirm" autocomplete="off" style="width:8em"></label></p>';
+        submit_button('Delete all usage data', 'delete', 'maus_reset', false);
+        echo '</form></div>';
     }
 
     /** Waiting and held reservations, read-only; members and admin members change them on /c/<code>. */

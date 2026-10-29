@@ -6,12 +6,51 @@ if (!defined('ABSPATH')) {
 
 final class MAUS_DB {
 
-    private const VERSION = '5';
+    private const VERSION = '6';
     private const OPTION  = 'maus_db_version';
 
     public static function table(string $name): string {
         global $wpdb;
         return $wpdb->prefix . 'maus_' . $name;
+    }
+
+    /**
+     * Usage data that the reset after the trial deletes (§11.9). The catalog
+     * (games, game_links, copies with their codes and sticker dates) stays,
+     * so printed stickers keep working.
+     */
+    public const RESET_TABLES = ['loans', 'reservations', 'issues', 'members', 'sessions', 'login_tokens'];
+
+    /** @return array<string,int> rows per table */
+    public static function usage_counts(bool $with_feedback): array {
+        global $wpdb;
+        $counts = [];
+        foreach (array_merge(self::RESET_TABLES, $with_feedback ? ['feedback'] : []) as $name) {
+            $counts[$name] = (int) $wpdb->get_var('SELECT COUNT(*) FROM ' . self::table($name));
+        }
+        return $counts;
+    }
+
+    /** Deletes all usage data in one transaction. @return array<string,int> rows deleted per table */
+    public static function reset_usage_data(bool $with_feedback): array {
+        global $wpdb;
+        $deleted = [];
+        $wpdb->query('START TRANSACTION');
+        try {
+            foreach (array_merge(self::RESET_TABLES, $with_feedback ? ['feedback'] : []) as $name) {
+                $n = $wpdb->query('DELETE FROM ' . self::table($name));
+                if ($n === false) {
+                    throw new RuntimeException('Database error: ' . $wpdb->last_error);
+                }
+                $deleted[$name] = (int) $n;
+            }
+            $wpdb->query('COMMIT');
+        } catch (Throwable $e) {
+            $wpdb->query('ROLLBACK');
+            throw $e;
+        }
+        delete_option('maus_digest_week');
+        return $deleted;
     }
 
     public static function maybe_install(): void {
@@ -159,6 +198,18 @@ final class MAUS_DB {
   UNIQUE KEY token_hash (token_hash),
   KEY member_id (member_id),
   KEY expires_at (expires_at)
+) $charset;";
+
+        // Feedback from testers (§11.9). page is the path they came from; the name is copied, as the reset may delete members.
+        $schemas[] = "CREATE TABLE {$t('feedback')} (
+  id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  member_id bigint(20) unsigned DEFAULT NULL,
+  member_name varchar(150) NOT NULL DEFAULT '',
+  page varchar(255) NOT NULL DEFAULT '',
+  text text NOT NULL,
+  created_at datetime NOT NULL,
+  PRIMARY KEY  (id),
+  KEY created_at (created_at)
 ) $charset;";
 
         foreach ($schemas as $sql) {

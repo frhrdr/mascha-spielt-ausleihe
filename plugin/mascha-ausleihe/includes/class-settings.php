@@ -11,6 +11,9 @@ if (!defined('ABSPATH')) {
 final class MAUS_Settings {
 
     private const DEFAULTS = [
+        // Feedback phase before go-live (§11.9): banner on every member page and "[Test]" in every
+        // email. Set to false at go-live, after resetting the data in WP admin → Ausleihe → Reset.
+        'trial_mode'                => true,
         'loan_period_days'          => 28,
         'max_renewals'              => 2,
         'max_concurrent_loans'      => 10,
@@ -29,7 +32,7 @@ final class MAUS_Settings {
         'qr_base_url'               => 'https://machbarschaft-suedstadt.de',
     ];
 
-    /** @return int|string */
+    /** @return int|string|bool */
     public static function get(string $key) {
         if (!array_key_exists($key, self::DEFAULTS)) {
             throw new InvalidArgumentException("Unknown setting: $key");

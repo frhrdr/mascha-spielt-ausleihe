@@ -8,20 +8,18 @@ final class MAUS_Mail {
 
     public static function send_login_link(object $member, string $url): bool {
         $lang = $member->language;
-        return wp_mail(
-            $member->email,
-            MAUS_I18n::t('mail_subject', $lang),
-            MAUS_I18n::t('mail_body', $lang, $member->name, $url, MAUS_Settings::get('login_link_minutes'))
-        );
+        return self::send($member, MAUS_I18n::t('mail_subject', $lang),
+            MAUS_I18n::t('mail_body', $lang, $member->name, $url, MAUS_Settings::get('login_link_minutes')));
     }
 
     public static function send_welcome(object $member, string $url): bool {
         $lang = $member->language;
-        return wp_mail(
-            $member->email,
-            MAUS_I18n::t('welcome_subject', $lang),
-            MAUS_I18n::t('welcome_body', $lang, $member->name, $url, MAUS_Settings::get('welcome_link_days'))
-        );
+        return self::send($member, MAUS_I18n::t('welcome_subject', $lang),
+            MAUS_I18n::t('welcome_body', $lang, $member->name, $url, MAUS_Settings::get('welcome_link_days')));
+    }
+
+    public static function feedback(object $from, string $page, string $text): void {
+        self::to_admins('mail_feedback_subject', [$from->name], 'mail_feedback_body', [$from->name, $text, $page, admin_url('admin.php?page=maus-feedback')]);
     }
 
     /** $kind: 'before', 'due' or 'overdue' (MAUS_Jobs). */
@@ -57,7 +55,12 @@ final class MAUS_Mail {
         }
     }
 
+    /** Every email goes through here; in trial mode it is marked as a test. */
     private static function send(object $member, string $subject, string $body): bool {
+        if (MAUS_Settings::get('trial_mode')) {
+            $subject = '[Test] ' . $subject;
+            $body = MAUS_I18n::t('trial_mail_note', $member->language) . "\n\n" . $body;
+        }
         $ok = wp_mail($member->email, $subject, $body);
         if (!$ok) {
             error_log('maus: mail could not be sent to member ' . $member->id);
@@ -84,14 +87,7 @@ final class MAUS_Mail {
         global $wpdb;
         $admins = $wpdb->get_results("SELECT * FROM " . MAUS_DB::table('members') . " WHERE role = 'admin' AND active = 1");
         foreach ($admins as $a) {
-            $ok = wp_mail(
-                $a->email,
-                MAUS_I18n::t($subject_key, $a->language, ...$subject_args),
-                MAUS_I18n::t($body_key, $a->language, ...$body_args)
-            );
-            if (!$ok) {
-                error_log('maus: admin mail could not be sent to member ' . $a->id);
-            }
+            self::send($a, MAUS_I18n::t($subject_key, $a->language, ...$subject_args), MAUS_I18n::t($body_key, $a->language, ...$body_args));
         }
     }
 }
